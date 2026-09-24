@@ -1,0 +1,22 @@
+{
+  "name": "harvesters-akure",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "description": "Harvesters Akure frontend and launch dashboards",
+  "scripts": {
+    "start": "node --env-file-if-exists=.env server.js",
+    "api": "node --env-file-if-exists=.env server.js",
+    "dev": "vite --host 127.0.0.1",
+    "build": "vite build",
+    "preview": "vite preview --host 127.0.0.1"
+  },
+  "devDependencies": {
+    "playwright": "^1.62.1",
+    "vite": "^8.2.1"
+  },
+  "dependencies": {
+    "@supabase/supabase-js": "^2.117.1",
+    "three": "^0.185.1"
+  }
+}

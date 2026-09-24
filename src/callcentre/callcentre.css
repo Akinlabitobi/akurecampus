@@ -1,0 +1,377 @@
+/* Outreach Call Centre: reuses the main site's tokens, buttons, forms,
+   tables, and dashboard-shell so this looks like the same product family,
+   then adds the handful of components specific to calling and admin work. */
+@import "../styles.css";
+
+body {
+  background: #eef3f8;
+}
+
+.cc-topbar {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  height: 64px;
+  padding: 0 clamp(16px, 4vw, 32px);
+  background: rgba(255, 255, 255, 0.95);
+  border-bottom: 1px solid rgba(221, 227, 234, 0.7);
+  backdrop-filter: blur(16px);
+}
+
+.cc-brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+  color: var(--navy);
+  font-family: "Plus Jakarta Sans", sans-serif;
+  font-weight: 800;
+}
+
+.cc-brand img {
+  width: 132px;
+  height: 34px;
+  object-fit: contain;
+}
+
+.cc-who {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  color: var(--muted);
+  font-size: 0.85rem;
+  font-weight: 700;
+}
+
+.cc-main {
+  max-width: 720px;
+  margin: 0 auto;
+  padding: 24px 16px 64px;
+}
+
+.cc-main.wide {
+  max-width: 1180px;
+}
+
+.cc-card {
+  padding: 24px;
+  margin-bottom: 16px;
+  background: var(--white);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  box-shadow: 0 12px 30px rgba(7, 30, 61, 0.06);
+}
+
+.cc-card-warn {
+  background: #fff9ec;
+  border-color: #f4c453;
+}
+
+.cc-card-warn pre {
+  padding: 12px;
+  overflow-x: auto;
+  background: var(--navy);
+  color: #eaf4ff;
+  border-radius: 8px;
+  font-size: 0.82rem;
+}
+
+.cc-center {
+  min-height: calc(100vh - 64px);
+  display: grid;
+  place-items: center;
+  padding: 24px;
+}
+
+.cc-auth-card {
+  width: min(420px, 100%);
+  display: grid;
+  gap: 16px;
+  padding: 32px;
+  text-align: center;
+  background: var(--white);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  box-shadow: var(--shadow);
+}
+
+.cc-auth-card img {
+  width: 130px;
+  margin: 0 auto;
+}
+
+.cc-auth-card h1 {
+  margin: 0;
+  font-size: 1.5rem;
+}
+
+.cc-auth-card p {
+  margin: 0;
+  color: var(--muted);
+}
+
+.cc-auth-card form {
+  display: grid;
+  gap: 14px;
+  text-align: left;
+}
+
+.cc-auth-card label {
+  display: grid;
+  gap: 6px;
+  color: var(--navy);
+  font-size: 0.82rem;
+  font-weight: 800;
+}
+
+.cc-auth-card input,
+.cc-auth-card select {
+  min-height: 46px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 0 14px;
+  outline: none;
+}
+
+.cc-pin-input {
+  text-align: center;
+  font-size: 1.4rem;
+  letter-spacing: 0.4em;
+}
+
+.cc-hint {
+  margin: 0;
+  color: var(--muted);
+  font-size: 0.8rem;
+}
+
+.cc-toolbar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 16px;
+}
+
+.cc-stat-strip {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+  gap: 12px;
+  margin-bottom: 20px;
+}
+
+.cc-stat {
+  padding: 16px;
+  background: var(--white);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+}
+
+.cc-stat span {
+  display: block;
+  color: var(--muted);
+  font-size: 0.74rem;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.cc-stat strong {
+  display: block;
+  margin-top: 4px;
+  font-size: 1.6rem;
+  color: var(--navy);
+}
+
+.cc-script-toggle {
+  margin-bottom: 16px;
+}
+
+.cc-script-body {
+  margin-top: 10px;
+  padding: 14px;
+  color: var(--navy);
+  white-space: pre-wrap;
+  background: var(--soft);
+  border-radius: 8px;
+  font-size: 0.9rem;
+  line-height: 1.5;
+}
+
+.cc-queue-tabs {
+  display: flex;
+  gap: 8px;
+  margin-bottom: 14px;
+}
+
+.cc-queue-tabs button {
+  padding: 8px 14px;
+  color: var(--navy);
+  background: var(--white);
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  font-weight: 800;
+  font-size: 0.82rem;
+}
+
+.cc-queue-tabs button.active {
+  color: var(--white);
+  background: var(--red);
+  border-color: var(--red);
+}
+
+.cc-contact-card {
+  padding: 20px;
+  margin-bottom: 14px;
+  background: var(--white);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  box-shadow: 0 8px 20px rgba(7, 30, 61, 0.05);
+}
+
+.cc-contact-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.cc-contact-head h3 {
+  margin: 0;
+  font-size: 1.1rem;
+}
+
+.cc-contact-meta {
+  margin: 6px 0 0;
+  color: var(--muted);
+  font-size: 0.86rem;
+}
+
+.cc-tag-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-top: 10px;
+}
+
+.cc-tag {
+  padding: 3px 10px;
+  color: var(--navy);
+  background: var(--soft);
+  border-radius: 999px;
+  font-size: 0.72rem;
+  font-weight: 800;
+  text-transform: uppercase;
+}
+
+.cc-tag.status-Reached,
+.cc-tag.status-Will-attend {
+  color: #0f8b4c;
+  background: #e9f9f0;
+}
+
+.cc-tag.status-Not-reached,
+.cc-tag.status-Wrong-number,
+.cc-tag.status-Do-not-contact {
+  color: var(--red);
+  background: var(--red-soft);
+}
+
+.cc-tag.status-Needs-follow-up,
+.cc-tag.status-Prayer-request {
+  color: #9a6b00;
+  background: #fff3d9;
+}
+
+.cc-actions-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  margin-top: 14px;
+}
+
+.cc-outcome {
+  margin-top: 16px;
+  padding-top: 16px;
+  border-top: 1px dashed var(--line);
+}
+
+.cc-outcome-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+  gap: 8px;
+  margin-bottom: 14px;
+}
+
+.cc-outcome-grid button {
+  padding: 12px;
+  color: var(--navy);
+  background: var(--soft);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  font-weight: 800;
+}
+
+.cc-outcome-grid button.selected {
+  color: var(--white);
+  background: var(--blue);
+  border-color: var(--blue);
+}
+
+.cc-checkline {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 8px 0;
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.cc-checkline input {
+  width: auto;
+}
+
+.cc-empty {
+  padding: 40px 20px;
+  color: var(--muted);
+  text-align: center;
+}
+
+/* Admin shell reuses .dashboard-shell/.panel/.table/.metric-grid from
+   styles.css for visual consistency with the main site's admin dashboard. */
+.cc-tab-panel {
+  display: grid;
+  gap: 16px;
+}
+
+.cc-import-box textarea {
+  width: 100%;
+  min-height: 140px;
+  padding: 12px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  font-family: ui-monospace, Menlo, Consolas, monospace;
+  font-size: 0.82rem;
+}
+
+.cc-flag {
+  display: inline-block;
+  padding: 2px 8px;
+  margin: 2px 4px 2px 0;
+  color: #9a1c1c;
+  background: #ffe9e9;
+  border-radius: 999px;
+  font-size: 0.7rem;
+  font-weight: 800;
+}
+
+@media (max-width: 640px) {
+  .cc-contact-head {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+}

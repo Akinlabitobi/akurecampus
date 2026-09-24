@@ -1,0 +1,8 @@
+{
+  "framework": "vite",
+  "functions": {
+    "api/[...path].js": {
+      "maxDuration": 30
+    }
+  }
+}
