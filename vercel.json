@@ -1,8 +1,11 @@
 {
   "framework": "vite",
   "functions": {
-    "api/[...path].js": {
+    "api/handler.js": {
       "maxDuration": 30
     }
-  }
+  },
+  "rewrites": [
+    { "source": "/api/:rest*", "destination": "/api/handler" }
+  ]
 }
