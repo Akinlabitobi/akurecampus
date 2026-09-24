@@ -529,6 +529,20 @@ async function syncToGoogleSheet(record) {
   return { synced: true, duplicate: Boolean(result.duplicate) };
 }
 
+// The submission is already saved to the local database by the time this
+// runs (see both call sites below) -- a Google Sheet problem is a secondary,
+// best-effort integration failing, never a reason to tell the person who
+// just submitted the form that their submission failed. Wrapping the call
+// here keeps that guarantee in one place instead of relying on every caller
+// to remember it.
+async function trySyncToGoogleSheet(record) {
+  try {
+    return await syncToGoogleSheet(record);
+  } catch (error) {
+    return { synced: false, error: error.message };
+  }
+}
+
 async function handleApi(req, res, url) {
   if (req.method === "OPTIONS") {
     send(res, 204, "");
@@ -564,7 +578,7 @@ async function handleApi(req, res, url) {
       const submissionId = cleanText(body.submissionId || "");
       const existing = submissionId && db.submissions.find(record => record.id === submissionId);
       if (existing) {
-        const googleSheet = await syncToGoogleSheet(existing);
+        const googleSheet = await trySyncToGoogleSheet(existing);
         send(res, 200, { record: existing, dashboard: dashboard(db), googleSheet });
         return true;
       }
@@ -578,7 +592,7 @@ async function handleApi(req, res, url) {
       };
       db.submissions.push(record);
       writeDb(db);
-      const googleSheet = await syncToGoogleSheet(record);
+      const googleSheet = await trySyncToGoogleSheet(record);
       send(res, 201, { record, dashboard: dashboard(db), googleSheet });
     } catch (error) {
       send(res, 400, { error: error.message });

@@ -6,3 +6,5 @@ dist/
 data/database.json
 debug.log
 Harvesters Akure Leads Genetation request.xlsx
+
+.vercel

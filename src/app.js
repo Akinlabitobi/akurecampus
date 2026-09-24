@@ -15,6 +15,23 @@ const navItems = [
   ["contact", "Contact"]
 ];
 
+// Deep-linkable views, via a URL hash (e.g. #admin) rather than a real path
+// -- the hash never reaches the server, so it works identically in dev and
+// production with no CDN/routing configuration needed. "admin" is the
+// friendly public name for the "dashboard" view.
+const HASH_ALIASES = { admin: "dashboard" };
+const VALID_VIEWS = [...navItems.map(([id]) => id), "dashboard"];
+
+function viewFromHash() {
+  const raw = window.location.hash.replace(/^#/, "");
+  const view = HASH_ALIASES[raw] || raw;
+  return VALID_VIEWS.includes(view) ? view : "home";
+}
+
+function hashForView(view) {
+  return view === "dashboard" ? "admin" : view;
+}
+
 const stats = [
   ["12+", "Communities"],
   ["18", "Departments"],
@@ -75,7 +92,7 @@ const PERMISSION_LABELS = {
 };
 
 const app = document.querySelector("#app");
-let activeView = "home";
+let activeView = viewFromHash();
 let menuOpen = false;
 let activeDashboard = "overview";
 let dashboardData = null;
@@ -113,12 +130,22 @@ function icon(name) {
   return `<svg class="icon" viewBox="0 0 24 24" aria-hidden="true">${paths[name] || paths.arrow}</svg>`;
 }
 
-function navigate(view) {
+function navigate(view, options = {}) {
   activeView = view;
   menuOpen = false;
   window.scrollTo({ top: 0, behavior: "smooth" });
+  if (!options.skipHash) {
+    const hash = hashForView(view);
+    if ((window.location.hash.replace(/^#/, "") || "") !== hash) {
+      window.location.hash = hash === "home" ? "" : hash;
+    }
+  }
   render();
 }
+
+window.addEventListener("hashchange", () => {
+  navigate(viewFromHash(), { skipHash: true });
+});
 
 async function loadDashboard(force = false) {
   if (dashboardLoading || (dashboardData && !force)) return;
@@ -703,6 +730,7 @@ function dashboard() {
     ["attendance", "Attendance", true],
     ["giving", "Giving", true],
     ["care", "Care", true],
+    ["newsletter", "Newsletter", true],
     ["content", "Content", true],
     ["broadcast", "Broadcast", can("send_broadcasts")],
     ["admins", "Admins", can("manage_admins")]
@@ -785,6 +813,11 @@ function dashboardContent() {
     const records = submissions.filter(row => ["counselling", "nlp", "contact"].includes(row.type));
     const rows = records.map(row => [row.type, recordCode(row), row.fields.fullName || "-", row.fields.phoneNumber || row.fields.emailAddress || "-", row.fields.careArea || row.fields.prayerFocus || row.fields.subject || "-", row.status]);
     return `<div class="table">${editableTable(["Type", "Code", "Name", "Contact", "Category", "Status"], rows, records)}</div>`;
+  }
+  if (activeDashboard === "newsletter") {
+    const records = submissions.filter(row => row.type === "newsletter");
+    const rows = records.map(row => [recordCode(row), row.fields.emailAddress || row.fields.email || "-", new Date(row.createdAt).toLocaleString()]);
+    return `<div class="metric-grid"><article class="metric large"><span>Newsletter Signups</span><strong>${metrics.newsletter}</strong><small>footer email opt-ins</small></article></div><div class="table">${editableTable(["Code", "Email", "Date"], rows, records)}</div>`;
   }
   const canManageContent = can("manage_content");
   const launchHeaders = ["Item", "Type", "Status", "Due", ...(canManageContent ? ["Actions"] : [])];
