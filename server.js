@@ -3,6 +3,7 @@ import { randomUUID, randomBytes, scryptSync, timingSafeEqual } from "node:crypt
 import { existsSync, mkdirSync, readFileSync, writeFileSync, statSync } from "node:fs";
 import { extname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { createClient } from "@supabase/supabase-js";
 
 const root = resolve(fileURLToPath(new URL(".", import.meta.url)));
 const dataDir = join(root, "data");
@@ -18,6 +19,19 @@ const termiiChannel = process.env.TERMII_SMS_CHANNEL || "generic";
 const termiiEmailConfigurationId = process.env.TERMII_EMAIL_CONFIGURATION_ID || "";
 const termiiEmailTemplateId = process.env.TERMII_EMAIL_TEMPLATE_ID || "";
 const adminBroadcastToken = process.env.ADMIN_BROADCAST_TOKEN || "";
+
+// Site data (submissions, admins, sessions, audit log, launch items) lives
+// in Supabase when these are set (see site-schema.sql) -- required on
+// Vercel, since serverless functions there have a read-only filesystem and
+// cannot write a local JSON file. Falls back to the local JSON file only
+// when they're absent, so a plain `git clone` + `npm run dev` still works
+// with zero setup for local-only contributors.
+const supabaseUrl = process.env.SUPABASE_URL || "";
+const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY || "";
+const useSupabase = Boolean(supabaseUrl && supabaseServiceKey);
+const supabase = useSupabase
+  ? createClient(supabaseUrl, supabaseServiceKey, { auth: { persistSession: false } })
+  : null;
 
 const ALL_PERMISSIONS = [
   "view_dashboard",
@@ -37,6 +51,13 @@ const ROLE_DEFAULTS = {
 const SESSION_TTL_MS = 12 * 60 * 60 * 1000;
 const loginAttempts = new Map();
 
+const defaultLaunchItems = () => [
+  { id: randomUUID(), item: "Launch Sunday", type: "Event", status: "Published", due: "Aug 30" },
+  { id: randomUUID(), item: "Akure Workforce Form", type: "Form", status: "Live", due: "Aug 21" },
+  { id: randomUUID(), item: "First-Time Guest Flow", type: "Automation", status: "Ready", due: "Aug 18" },
+  { id: randomUUID(), item: "Giving Campaign", type: "Finance", status: "Review", due: "Aug 24" }
+];
+
 const defaultDb = {
   submissions: [],
   admins: [],
@@ -45,12 +66,7 @@ const defaultDb = {
   seed: {
     readiness: 72,
     fundsTarget: 12000000,
-    launchItems: [
-      { id: randomUUID(), item: "Launch Sunday", type: "Event", status: "Published", due: "Aug 30" },
-      { id: randomUUID(), item: "Akure Workforce Form", type: "Form", status: "Live", due: "Aug 21" },
-      { id: randomUUID(), item: "First-Time Guest Flow", type: "Automation", status: "Ready", due: "Aug 18" },
-      { id: randomUUID(), item: "Giving Campaign", type: "Finance", status: "Review", due: "Aug 24" }
-    ]
+    launchItems: defaultLaunchItems()
   }
 };
 
@@ -108,6 +124,22 @@ function createSeedAdmin() {
   return { admin, generatedPassword };
 }
 
+function announceSeedAdmin(admin, generatedPassword) {
+  console.log("-".repeat(60));
+  console.log("Created the initial Harvesters Akure admin account:");
+  console.log(`  Email:    ${admin.email}`);
+  if (generatedPassword) {
+    console.log(`  Password: ${generatedPassword}`);
+    console.log("  (Randomly generated because ADMIN_PASSWORD was not set.");
+    console.log("  Save this now, then change it after signing in. It will not be shown again.)");
+  } else {
+    console.log("  Password: (value of ADMIN_PASSWORD in your environment)");
+  }
+  console.log("-".repeat(60));
+}
+
+// ---- JSON-file persistence (local dev fallback) ----------------------
+
 function migrateDb(db) {
   let changed = false;
   if (!Array.isArray(db.submissions)) { db.submissions = []; changed = true; }
@@ -123,17 +155,7 @@ function migrateDb(db) {
     const { admin, generatedPassword } = createSeedAdmin();
     db.admins.push(admin);
     changed = true;
-    console.log("-".repeat(60));
-    console.log("Created the initial Harvesters Akure admin account:");
-    console.log(`  Email:    ${admin.email}`);
-    if (generatedPassword) {
-      console.log(`  Password: ${generatedPassword}`);
-      console.log("  (Randomly generated because ADMIN_PASSWORD was not set.");
-      console.log("  Save this now, then change it after signing in. It will not be shown again.)");
-    } else {
-      console.log("  Password: (value of ADMIN_PASSWORD in your environment)");
-    }
-    console.log("-".repeat(60));
+    announceSeedAdmin(admin, generatedPassword);
   }
   const activeSessionCount = db.sessions.length;
   db.sessions = db.sessions.filter(session => new Date(session.expiresAt) > new Date());
@@ -141,16 +163,131 @@ function migrateDb(db) {
   return changed;
 }
 
-function readDb() {
+function readDbFromFile() {
   ensureDb();
   const db = JSON.parse(readFileSync(dbPath, "utf8"));
-  if (migrateDb(db)) writeDb(db);
+  const changed = migrateDb(db);
+  if (changed) writeDbToFile(db);
   return db;
 }
 
-function writeDb(db) {
+function writeDbToFile(db) {
   ensureDb();
   writeFileSync(dbPath, JSON.stringify(db, null, 2));
+}
+
+// ---- Supabase persistence (required on Vercel) ------------------------
+
+function assertNoError(error, context) {
+  if (error) throw new Error(`Supabase ${context} failed: ${error.message}`);
+}
+
+// Brings a Supabase-backed array table in line with the in-memory array:
+// deletes rows no longer present, upserts everything current. Simpler and
+// far less bug-prone than hand-converting every individual mutation in
+// every route handler into its own targeted insert/update/delete -- this
+// app's traffic is small enough that a full sync on every write is cheap.
+async function syncTable(table, idKey, rows) {
+  const { data: existing, error: fetchError } = await supabase.from(table).select(idKey);
+  assertNoError(fetchError, `read (${table})`);
+  const existingIds = new Set((existing || []).map(row => row[idKey]));
+  const currentIds = new Set(rows.map(row => row[idKey]));
+  const toDelete = [...existingIds].filter(id => !currentIds.has(id));
+  if (toDelete.length) {
+    const { error } = await supabase.from(table).delete().in(idKey, toDelete);
+    assertNoError(error, `delete (${table})`);
+  }
+  if (rows.length) {
+    const { error } = await supabase.from(table).upsert(rows, { onConflict: idKey });
+    assertNoError(error, `upsert (${table})`);
+  }
+}
+
+async function readDbFromSupabase() {
+  const seedRes = await supabase.from("harvesters_seed").select("*").eq("id", true).maybeSingle();
+  assertNoError(seedRes.error, "read (harvesters_seed)");
+
+  if (!seedRes.data) {
+    // First run against this Supabase project: seed the settings row and
+    // default launch items together, so a later read never mistakes "an
+    // admin cleared every launch item" for "never seeded."
+    const { error: seedInsertError } = await supabase
+      .from("harvesters_seed")
+      .insert({ id: true, readiness: 72, fundsTarget: 12000000 });
+    assertNoError(seedInsertError, "seed insert (harvesters_seed)");
+    const { error: launchInsertError } = await supabase
+      .from("harvesters_launch_items")
+      .insert(defaultLaunchItems());
+    assertNoError(launchInsertError, "seed insert (harvesters_launch_items)");
+  }
+
+  const [submissionsRes, adminsRes, sessionsRes, auditRes, launchRes, freshSeedRes] = await Promise.all([
+    supabase.from("harvesters_submissions").select("*").order("createdAt", { ascending: true }),
+    supabase.from("harvesters_admins").select("*"),
+    supabase.from("harvesters_sessions").select("*"),
+    supabase.from("harvesters_audit_log").select("*").order("createdAt", { ascending: false }).limit(200),
+    supabase.from("harvesters_launch_items").select("*"),
+    supabase.from("harvesters_seed").select("*").eq("id", true).maybeSingle()
+  ]);
+  assertNoError(submissionsRes.error, "read (harvesters_submissions)");
+  assertNoError(adminsRes.error, "read (harvesters_admins)");
+  assertNoError(sessionsRes.error, "read (harvesters_sessions)");
+  assertNoError(auditRes.error, "read (harvesters_audit_log)");
+  assertNoError(launchRes.error, "read (harvesters_launch_items)");
+  assertNoError(freshSeedRes.error, "read (harvesters_seed)");
+
+  const db = {
+    submissions: submissionsRes.data || [],
+    admins: adminsRes.data || [],
+    sessions: sessionsRes.data || [],
+    auditLog: auditRes.data || [],
+    seed: {
+      readiness: freshSeedRes.data?.readiness ?? 72,
+      fundsTarget: Number(freshSeedRes.data?.fundsTarget ?? 12000000),
+      launchItems: launchRes.data || []
+    }
+  };
+
+  if (!db.admins.length) {
+    const { admin, generatedPassword } = createSeedAdmin();
+    const { error } = await supabase.from("harvesters_admins").insert(admin);
+    assertNoError(error, "seed insert (harvesters_admins)");
+    db.admins.push(admin);
+    announceSeedAdmin(admin, generatedPassword);
+  }
+
+  const expiredTokens = db.sessions.filter(session => new Date(session.expiresAt) <= new Date()).map(session => session.token);
+  if (expiredTokens.length) {
+    const { error } = await supabase.from("harvesters_sessions").delete().in("token", expiredTokens);
+    assertNoError(error, "delete (harvesters_sessions)");
+    db.sessions = db.sessions.filter(session => !expiredTokens.includes(session.token));
+  }
+
+  return db;
+}
+
+async function writeDbToSupabase(db) {
+  await Promise.all([
+    syncTable("harvesters_submissions", "id", db.submissions),
+    syncTable("harvesters_admins", "id", db.admins),
+    syncTable("harvesters_sessions", "token", db.sessions),
+    syncTable("harvesters_audit_log", "id", db.auditLog),
+    syncTable("harvesters_launch_items", "id", db.seed.launchItems)
+  ]);
+  const { error } = await supabase
+    .from("harvesters_seed")
+    .upsert({ id: true, readiness: db.seed.readiness, fundsTarget: db.seed.fundsTarget }, { onConflict: "id" });
+  assertNoError(error, "upsert (harvesters_seed)");
+}
+
+// ---- Persistence dispatch ----------------------------------------------
+
+async function readDb() {
+  return useSupabase ? readDbFromSupabase() : readDbFromFile();
+}
+
+async function writeDb(db) {
+  return useSupabase ? writeDbToSupabase(db) : writeDbToFile(db);
 }
 
 function sanitizeAdmin(admin) {
@@ -529,8 +666,8 @@ async function syncToGoogleSheet(record) {
   return { synced: true, duplicate: Boolean(result.duplicate) };
 }
 
-// The submission is already saved to the local database by the time this
-// runs (see both call sites below) -- a Google Sheet problem is a secondary,
+// The submission is already saved to the database by the time this runs
+// (see both call sites below) -- a Google Sheet problem is a secondary,
 // best-effort integration failing, never a reason to tell the person who
 // just submitted the form that their submission failed. Wrapping the call
 // here keeps that guarantee in one place instead of relying on every caller
@@ -553,6 +690,7 @@ async function handleApi(req, res, url) {
     send(res, 200, {
       ok: true,
       runtime: process.env.VERCEL ? "vercel" : "local",
+      database: useSupabase ? "supabase" : "local-file",
       integrations: {
         googleSheets: Boolean(googleAppsScriptUrl && googleAppsScriptToken),
         termiiSms: Boolean(termiiApiKey && termiiBaseUrl && termiiSenderId),
@@ -574,7 +712,7 @@ async function handleApi(req, res, url) {
         return true;
       }
       validateSubmission(type, fields);
-      const db = readDb();
+      const db = await readDb();
       const submissionId = cleanText(body.submissionId || "");
       const existing = submissionId && db.submissions.find(record => record.id === submissionId);
       if (existing) {
@@ -591,7 +729,7 @@ async function handleApi(req, res, url) {
         createdAt: new Date().toISOString()
       };
       db.submissions.push(record);
-      writeDb(db);
+      await writeDb(db);
       const googleSheet = await trySyncToGoogleSheet(record);
       send(res, 201, { record, dashboard: dashboard(db), googleSheet });
     } catch (error) {
@@ -608,7 +746,7 @@ async function handleApi(req, res, url) {
       if (!email || !password) throw new Error("Please enter your email and password.");
       const attemptKey = loginAttemptKey(req, email);
       if (isLoginLocked(attemptKey)) throw new Error("Too many attempts. Please try again in a few minutes.");
-      const db = readDb();
+      const db = await readDb();
       const admin = db.admins.find(item => item.email === email);
       if (!admin || admin.active === false || !verifyPassword(password, admin.passwordHash)) {
         registerFailedLogin(attemptKey);
@@ -618,7 +756,7 @@ async function handleApi(req, res, url) {
       admin.lastLoginAt = new Date().toISOString();
       const session = createSession(db, admin.id);
       addAuditLog(db, admin, "Signed in");
-      writeDb(db);
+      await writeDb(db);
       setSessionCookie(res, session.token);
       send(res, 200, { admin: sanitizeAdmin(admin) });
     } catch (error) {
@@ -628,12 +766,12 @@ async function handleApi(req, res, url) {
   }
 
   if (url.pathname === "/api/admin/logout" && req.method === "POST") {
-    const db = readDb();
+    const db = await readDb();
     const token = parseCookies(req.headers.cookie).ha_session;
     if (token) {
       const before = db.sessions.length;
       db.sessions = db.sessions.filter(item => item.token !== token);
-      if (db.sessions.length !== before) writeDb(db);
+      if (db.sessions.length !== before) await writeDb(db);
     }
     clearSessionCookie(res);
     send(res, 200, { ok: true });
@@ -641,14 +779,14 @@ async function handleApi(req, res, url) {
   }
 
   if (url.pathname === "/api/admin/me" && req.method === "GET") {
-    const db = readDb();
+    const db = await readDb();
     const ctx = getSessionContext(req, db);
     send(res, 200, { admin: ctx ? sanitizeAdmin(ctx.admin) : null });
     return true;
   }
 
   if (url.pathname === "/api/admin/change-password" && req.method === "POST") {
-    const db = readDb();
+    const db = await readDb();
     const ctx = requireAdminSession(req, res, db, null);
     if (!ctx) return true;
     try {
@@ -660,7 +798,7 @@ async function handleApi(req, res, url) {
       ctx.admin.passwordHash = hashPassword(newPassword);
       ctx.admin.mustChangePassword = false;
       addAuditLog(db, ctx.admin, "Changed password");
-      writeDb(db);
+      await writeDb(db);
       send(res, 200, { admin: sanitizeAdmin(ctx.admin) });
     } catch (error) {
       send(res, 400, { error: error.message });
@@ -670,7 +808,7 @@ async function handleApi(req, res, url) {
 
   const submissionMatch = url.pathname.match(/^\/api\/admin\/submissions\/([^/]+)$/);
   if (submissionMatch && (req.method === "PATCH" || req.method === "DELETE")) {
-    const db = readDb();
+    const db = await readDb();
     if (req.method === "DELETE") {
       const ctx = requireAdminSession(req, res, db, "delete_submissions");
       if (!ctx) return true;
@@ -678,7 +816,7 @@ async function handleApi(req, res, url) {
       if (index === -1) { send(res, 404, { error: "Submission not found." }); return true; }
       const [removed] = db.submissions.splice(index, 1);
       addAuditLog(db, ctx.admin, "Deleted submission", `${removed.type} - ${removed.shortCode || removed.id}`);
-      writeDb(db);
+      await writeDb(db);
       send(res, 200, { ok: true, dashboard: dashboard(db) });
       return true;
     }
@@ -696,7 +834,7 @@ async function handleApi(req, res, url) {
       }
       record.updatedAt = new Date().toISOString();
       addAuditLog(db, ctx.admin, "Updated submission", `${record.type} - ${record.shortCode || record.id}`);
-      writeDb(db);
+      await writeDb(db);
       send(res, 200, { record, dashboard: dashboard(db) });
     } catch (error) {
       send(res, 400, { error: error.message });
@@ -705,7 +843,7 @@ async function handleApi(req, res, url) {
   }
 
   if (url.pathname === "/api/admin/launch-items" && req.method === "POST") {
-    const db = readDb();
+    const db = await readDb();
     const ctx = requireAdminSession(req, res, db, "manage_content");
     if (!ctx) return true;
     try {
@@ -720,7 +858,7 @@ async function handleApi(req, res, url) {
       if (!item.item) throw new Error("Please enter an item name.");
       db.seed.launchItems.push(item);
       addAuditLog(db, ctx.admin, "Added launch item", item.item);
-      writeDb(db);
+      await writeDb(db);
       send(res, 201, { item, dashboard: dashboard(db) });
     } catch (error) {
       send(res, 400, { error: error.message });
@@ -730,7 +868,7 @@ async function handleApi(req, res, url) {
 
   const launchItemMatch = url.pathname.match(/^\/api\/admin\/launch-items\/([^/]+)$/);
   if (launchItemMatch && (req.method === "PATCH" || req.method === "DELETE")) {
-    const db = readDb();
+    const db = await readDb();
     const ctx = requireAdminSession(req, res, db, "manage_content");
     if (!ctx) return true;
     const index = db.seed.launchItems.findIndex(entry => entry.id === launchItemMatch[1]);
@@ -738,7 +876,7 @@ async function handleApi(req, res, url) {
     if (req.method === "DELETE") {
       const [removed] = db.seed.launchItems.splice(index, 1);
       addAuditLog(db, ctx.admin, "Removed launch item", removed.item);
-      writeDb(db);
+      await writeDb(db);
       send(res, 200, { ok: true, dashboard: dashboard(db) });
       return true;
     }
@@ -750,7 +888,7 @@ async function handleApi(req, res, url) {
       if (body.status !== undefined) item.status = cleanText(body.status);
       if (body.due !== undefined) item.due = cleanText(body.due);
       addAuditLog(db, ctx.admin, "Updated launch item", item.item);
-      writeDb(db);
+      await writeDb(db);
       send(res, 200, { item, dashboard: dashboard(db) });
     } catch (error) {
       send(res, 400, { error: error.message });
@@ -759,7 +897,7 @@ async function handleApi(req, res, url) {
   }
 
   if (url.pathname === "/api/admin/admins" && req.method === "GET") {
-    const db = readDb();
+    const db = await readDb();
     const ctx = requireAdminSession(req, res, db, "manage_admins");
     if (!ctx) return true;
     send(res, 200, { admins: db.admins.map(sanitizeAdmin), permissions: ALL_PERMISSIONS, roles: ROLES });
@@ -767,7 +905,7 @@ async function handleApi(req, res, url) {
   }
 
   if (url.pathname === "/api/admin/admins" && req.method === "POST") {
-    const db = readDb();
+    const db = await readDb();
     const ctx = requireAdminSession(req, res, db, "manage_admins");
     if (!ctx) return true;
     try {
@@ -800,7 +938,7 @@ async function handleApi(req, res, url) {
       };
       db.admins.push(admin);
       addAuditLog(db, ctx.admin, "Created admin account", `${admin.name} (${admin.email})`);
-      writeDb(db);
+      await writeDb(db);
       send(res, 201, { admin: sanitizeAdmin(admin) });
     } catch (error) {
       send(res, 400, { error: error.message });
@@ -810,7 +948,7 @@ async function handleApi(req, res, url) {
 
   const adminMatch = url.pathname.match(/^\/api\/admin\/admins\/([^/]+)$/);
   if (adminMatch && (req.method === "PATCH" || req.method === "DELETE")) {
-    const db = readDb();
+    const db = await readDb();
     const ctx = requireAdminSession(req, res, db, "manage_admins");
     if (!ctx) return true;
     const target = db.admins.find(item => item.id === adminMatch[1]);
@@ -825,7 +963,7 @@ async function handleApi(req, res, url) {
       db.admins = db.admins.filter(item => item.id !== target.id);
       db.sessions = db.sessions.filter(item => item.adminId !== target.id);
       addAuditLog(db, ctx.admin, "Removed admin account", `${target.name} (${target.email})`);
-      writeDb(db);
+      await writeDb(db);
       send(res, 200, { ok: true });
       return true;
     }
@@ -855,7 +993,7 @@ async function handleApi(req, res, url) {
         db.sessions = db.sessions.filter(item => item.adminId !== target.id);
       }
       addAuditLog(db, ctx.admin, "Updated admin account", `${target.name} (${target.email})`);
-      writeDb(db);
+      await writeDb(db);
       send(res, 200, { admin: sanitizeAdmin(target) });
     } catch (error) {
       send(res, 400, { error: error.message });
@@ -864,7 +1002,7 @@ async function handleApi(req, res, url) {
   }
 
   if (url.pathname === "/api/admin/audit-log" && req.method === "GET") {
-    const db = readDb();
+    const db = await readDb();
     const ctx = requireAdminSession(req, res, db, null);
     if (!ctx) return true;
     send(res, 200, { entries: db.auditLog.slice(0, 100) });
@@ -872,7 +1010,7 @@ async function handleApi(req, res, url) {
   }
 
   if (url.pathname === "/api/admin/sms-audience" && req.method === "GET") {
-    const db = readDb();
+    const db = await readDb();
     if (!requireBroadcastAccess(req, res, db)) return true;
     const recipients = optedInPhones(db);
     send(res, 200, {
@@ -883,7 +1021,7 @@ async function handleApi(req, res, url) {
   }
 
   if (url.pathname === "/api/admin/bulk-sms" && req.method === "POST") {
-    const db = readDb();
+    const db = await readDb();
     const ctx = requireBroadcastAccess(req, res, db);
     if (!ctx) return true;
     try {
@@ -895,7 +1033,7 @@ async function handleApi(req, res, url) {
       const delivery = await sendTermiiBulkSms(recipients, message);
       if (ctx.admin) {
         addAuditLog(db, ctx.admin, "Sent bulk SMS", `${recipients.length} recipients`);
-        writeDb(db);
+        await writeDb(db);
       }
       send(res, 200, { ok: true, recipients: recipients.length, delivery });
     } catch (error) {
@@ -905,7 +1043,7 @@ async function handleApi(req, res, url) {
   }
 
   if (url.pathname === "/api/admin/bulk-email" && req.method === "POST") {
-    const db = readDb();
+    const db = await readDb();
     const ctx = requireBroadcastAccess(req, res, db);
     if (!ctx) return true;
     try {
@@ -918,7 +1056,7 @@ async function handleApi(req, res, url) {
       const delivery = await sendTermiiBulkEmail(recipients, subject, message);
       if (ctx.admin) {
         addAuditLog(db, ctx.admin, "Sent bulk email", `${recipients.length} recipients`);
-        writeDb(db);
+        await writeDb(db);
       }
       send(res, 200, { ok: true, recipients: recipients.length, delivery });
     } catch (error) {
@@ -929,7 +1067,7 @@ async function handleApi(req, res, url) {
 
   if (url.pathname.startsWith("/api/short-code/") && req.method === "GET") {
     const code = url.pathname.split("/").pop();
-    const record = findByShortCode(readDb(), code);
+    const record = findByShortCode(await readDb(), code);
     if (!record) {
       send(res, 404, { error: "No saved attendee was found for that short code." });
       return true;
@@ -947,7 +1085,7 @@ async function handleApi(req, res, url) {
         send(res, 400, { error: "That attendance code is not valid for today." });
         return true;
       }
-      const db = readDb();
+      const db = await readDb();
       const name = cleanText(body.name || body.fullName);
       const phone = cleanText(body.phone || body.phoneNumber);
       if (!name && !phone) {
@@ -971,7 +1109,7 @@ async function handleApi(req, res, url) {
         createdAt: new Date().toISOString()
       };
       db.submissions.push(record);
-      writeDb(db);
+      await writeDb(db);
       send(res, 201, { record, dashboard: dashboard(db) });
     } catch (error) {
       send(res, 400, { error: error.message });
@@ -985,7 +1123,7 @@ async function handleApi(req, res, url) {
   }
 
   if (url.pathname === "/api/dashboard" && req.method === "GET") {
-    const db = readDb();
+    const db = await readDb();
     const ctx = requireAdminSession(req, res, db, "view_dashboard");
     if (!ctx) return true;
     send(res, 200, dashboard(db));
@@ -993,7 +1131,7 @@ async function handleApi(req, res, url) {
   }
 
   if (url.pathname === "/api/export" && req.method === "GET") {
-    const db = readDb();
+    const db = await readDb();
     const ctx = requireAdminSession(req, res, db, "export_data");
     if (!ctx) return true;
     send(res, 200, csv(db.submissions), "text/csv; charset=utf-8");
@@ -1024,13 +1162,22 @@ function serveStatic(req, res, url) {
 
 export async function requestHandler(req, res) {
   const url = new URL(req.url, `http://${req.headers.host}`);
-  if (url.pathname.startsWith("/api") && await handleApi(req, res, url)) return;
+  try {
+    if (url.pathname.startsWith("/api") && await handleApi(req, res, url)) return;
+  } catch (error) {
+    // A route handler threw without its own try/catch (e.g. readDb() itself
+    // failing) -- surface a clean JSON error instead of an opaque platform
+    // crash page, and never leave the response hanging.
+    if (!res.headersSent) send(res, 500, { error: error.message || "Something went wrong." });
+    return;
+  }
   serveStatic(req, res, url);
 }
 
 if (!process.env.VERCEL) {
   createServer(requestHandler).listen(port, "127.0.0.1", () => {
-    ensureDb();
+    if (!useSupabase) ensureDb();
     console.log(`Harvesters Akure server running at http://127.0.0.1:${port}`);
+    console.log(`Database: ${useSupabase ? "Supabase" : "local JSON file"}`);
   });
 }
