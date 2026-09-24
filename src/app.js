@@ -250,7 +250,13 @@ function fieldName(label) {
   return label
     .toLowerCase()
     .replace(/[^a-z0-9]+(.)/g, (_, chr) => chr.toUpperCase())
-    .replace(/[^a-z0-9]/g, "");
+    // Only strips leftover separator characters (spaces, punctuation) --
+    // must NOT exclude uppercase letters, since the replace above just
+    // produced them (e.g. "Full name" -> "fullName"). The previous
+    // [^a-z0-9] here stripped its own output's capitals right back out
+    // ("fullName" -> "fullame"), silently corrupting every multi-word
+    // field name the app has ever generated.
+    .replace(/[^a-zA-Z0-9]/g, "");
 }
 
 function money(value) {
