@@ -15,3 +15,6 @@ export const externalLinks = Object.freeze({
   weeklyPrayerWhatsapp: readPublicUrl("VITE_WEEKLY_PRAYER_WHATSAPP_URL"),
   giving: readPublicUrl("VITE_GIVING_URL")
 });
+
+
+

@@ -545,7 +545,7 @@ function communityPage() {
         ${communities.map(([title, text]) => `<article class="card compact"><h3>${title}</h3><p>${text}</p><button class="btn secondary block" data-focus-form>Register Interest</button></article>`).join("")}
       </div>
     </section>
-    ${formPage("Community Signup", ["Full name", "Phone number", "Preferred community", "Area in Akure", "Date of Birth"], "community")}
+    ${formPage("Community Signup", ["Full name", "Phone number", "Email address", "Preferred community", "Area in Akure", "Date of Birth", "Would you like to lead?"], "community")}
   `;
 }
 
@@ -594,7 +594,7 @@ function workforcePage() {
         <div class="pill-grid">${departments.map(item => `<button>${item}</button>`).join("")}</div>
       </div>
     </section>
-    ${formPage("Workforce Application", ["Full name", "Phone number", "Department", "Relevant experience"], "workforce")}
+    ${formPage("Workforce Application", ["Full name", "Phone number", "Email address", "Department", "Relevant experience", "Would you like to lead?"], "workforce")}
   `;
 }
 
@@ -680,8 +680,12 @@ function formField(field, type) {
   const name = fieldName(field);
   const dateOfBirth = field === "Date of Birth";
   const email = field === "Email address";
+  const leadershipInterest = field === "Would you like to lead?";
   const required = dateOfBirth || (["community", "counselling"].includes(type) && ["Full name", "Phone number", "Preferred community", "Area in Akure", "Care area", "Preferred time"].includes(field));
   const tall = field === "Message" || field === "Relevant experience";
+  if (leadershipInterest) {
+    return `<label><span>${field}</span><select name="${name}"><option value="">Select an option</option><option value="Yes">Yes</option><option value="No">No</option></select></label>`;
+  }
   return `<label><span>${field}</span><input name="${name}" type="${dateOfBirth ? "date" : email ? "email" : "text"}" ${tall ? "data-tall" : ""} ${required ? "required" : ""} placeholder="${dateOfBirth ? "" : field}" /></label>`;
 }
 
@@ -797,13 +801,13 @@ function dashboardContent() {
   }
   if (activeDashboard === "communities") {
     const records = submissions.filter(row => row.type === "community");
-    const rows = records.map(row => [recordCode(row), row.fields.fullName || "-", row.fields.phoneNumber || "-", row.fields.preferredCommunity || "-", row.fields.areaInAkure || "-", new Date(row.createdAt).toLocaleDateString()]);
-    return `<div class="table">${editableTable(["Code", "Name", "Phone", "Community", "Area", "Date"], rows, records)}</div>`;
+    const rows = records.map(row => [recordCode(row), row.fields.fullName || "-", row.fields.phoneNumber || "-", row.fields.emailAddress || "-", row.fields.preferredCommunity || "-", row.fields.areaInAkure || "-", row.fields.wouldYouLikeToLead || "-", new Date(row.createdAt).toLocaleDateString()]);
+    return `<div class="table">${editableTable(["Code", "Name", "Phone", "Email", "Community", "Area", "Wants to Lead", "Date"], rows, records)}</div>`;
   }
   if (activeDashboard === "workforce") {
     const records = submissions.filter(row => row.type === "workforce");
-    const rows = records.map(row => [recordCode(row), row.fields.fullName || "-", row.fields.phoneNumber || "-", row.fields.department || "-", row.fields.relevantExperience || "-", row.status]);
-    return `<div class="table">${editableTable(["Code", "Name", "Phone", "Department", "Experience", "Status"], rows, records)}</div>`;
+    const rows = records.map(row => [recordCode(row), row.fields.fullName || "-", row.fields.phoneNumber || "-", row.fields.emailAddress || "-", row.fields.department || "-", row.fields.relevantExperience || "-", row.fields.wouldYouLikeToLead || "-", row.status]);
+    return `<div class="table">${editableTable(["Code", "Name", "Phone", "Email", "Department", "Experience", "Wants to Lead", "Status"], rows, records)}</div>`;
   }
   if (activeDashboard === "attendance") {
     const records = submissions.filter(row => row.type === "attendance");

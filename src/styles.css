@@ -1013,6 +1013,7 @@ h3 {
 }
 
 .form input,
+.form select,
 .newsletter input {
   width: 100%;
   min-height: 48px;
@@ -1020,6 +1021,9 @@ h3 {
   border-radius: 8px;
   padding: 0 14px;
   outline: none;
+  background: var(--white);
+  color: var(--ink);
+  font: inherit;
 }
 
 .form input[data-tall] {
