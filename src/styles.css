@@ -1102,6 +1102,14 @@ button:disabled {
 }
 
 .dashboard-main {
+  /* A CSS grid item won't shrink below its content's natural width by
+     default, so a wide table here was stretching the whole grid track
+     (and the page) past the viewport instead of scrolling inside .table
+     -- pushing the header's Export button and every table's Actions
+     column off-screen with no way to reach them. min-width: 0 lets this
+     track actually shrink to its assigned 1fr size, so .table's own
+     overflow-x below does its job as an internal scroll container. */
+  min-width: 0;
   padding: clamp(22px, 4vw, 42px);
 }
 
@@ -1139,6 +1147,40 @@ button:disabled {
   background: var(--white);
   border: 1px solid var(--line);
   border-radius: 8px;
+}
+
+.table-scroll-hint {
+  margin: 0 0 8px;
+  color: var(--muted);
+  font-size: 0.8rem;
+  font-weight: 700;
+}
+
+.table {
+  overflow-x: auto;
+  /* A wide table (Actions column and beyond) scrolls correctly here, but a
+     default browser scrollbar is thin enough that admins wouldn't notice
+     there was more to scroll to -- looks identical to "no Actions column
+     at all." Make it an obvious, always-visible bar instead. */
+  scrollbar-width: thin;
+  scrollbar-color: var(--line) transparent;
+}
+
+.table::-webkit-scrollbar {
+  height: 10px;
+}
+
+.table::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.table::-webkit-scrollbar-thumb {
+  background: var(--line);
+  border-radius: 999px;
+}
+
+.table::-webkit-scrollbar-thumb:hover {
+  background: var(--muted);
 }
 
 .panel h3 {
@@ -1467,11 +1509,7 @@ footer p {
     grid-template-columns: 82px 1fr 30px;
   }
 
-.table {
-  overflow-x: auto;
-}
-
-.section-table {
+  .section-table {
   margin-top: 20px;
 }
 

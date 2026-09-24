@@ -529,15 +529,71 @@ function dashboard(db) {
   };
 }
 
+function csvCell(value) {
+  return `"${String(value ?? "").replaceAll('"', '""')}"`;
+}
+
+function toCsv(headers, rows) {
+  return [headers.map(csvCell).join(","), ...rows.map(row => row.map(csvCell).join(","))].join("\n");
+}
+
+function sortByFields(records, getters) {
+  return [...records].sort((a, b) => {
+    for (const get of getters) {
+      const diff = String(get(a) || "").localeCompare(String(get(b) || ""));
+      if (diff) return diff;
+    }
+    return 0;
+  });
+}
+
 function csv(items) {
   const headers = ["id", "shortCode", "type", "createdAt", "name", "phone", "email", "service", "category", "amount", "message"];
   const rows = items.map(item => headers.map(key => {
-    const value = key === "shortCode"
-      ? item.shortCode || item.fields.shortCode || makeShortCode(item.id)
-      : item[key] ?? item.fields[key] ?? item.fields[key.replace("category", "preferredCommunity")] ?? "";
-    return `"${String(value).replaceAll('"', '""')}"`;
-  }).join(","));
-  return [headers.join(","), ...rows].join("\n");
+    if (key === "shortCode") return item.shortCode || item.fields.shortCode || makeShortCode(item.id);
+    if (key === "name") return item[key] ?? item.fields.fullName ?? item.fields.name ?? "";
+    if (key === "phone") return item[key] ?? item.fields.phoneNumber ?? item.fields.phone ?? "";
+    if (key === "email") return item[key] ?? item.fields.emailAddress ?? item.fields.email ?? "";
+    return item[key] ?? item.fields[key] ?? item.fields[key.replace("category", "preferredCommunity")] ?? "";
+  }));
+  return toCsv(headers, rows);
+}
+
+// Category-specific exports mirror the columns shown in that dashboard tab
+// exactly (including the fix above generically applied) and are sorted the
+// same way the tab is -- grouped by community/department, not signup time.
+function csvCommunity(items) {
+  const sorted = sortByFields(items, [record => record.fields.preferredCommunity, record => record.fields.fullName]);
+  const headers = ["Code", "Name", "Phone", "Email", "Community", "Area", "Wants to Lead", "Status", "Date"];
+  const rows = sorted.map(record => [
+    record.shortCode || makeShortCode(record.id),
+    record.fields.fullName || "",
+    record.fields.phoneNumber || "",
+    record.fields.emailAddress || "",
+    record.fields.preferredCommunity || "",
+    record.fields.areaInAkure || "",
+    record.fields.wouldYouLikeToLead || "",
+    record.status || "",
+    record.createdAt
+  ]);
+  return toCsv(headers, rows);
+}
+
+function csvWorkforce(items) {
+  const sorted = sortByFields(items, [record => record.fields.department, record => record.fields.fullName]);
+  const headers = ["Code", "Name", "Phone", "Email", "Department", "Experience", "Wants to Lead", "Status", "Date"];
+  const rows = sorted.map(record => [
+    record.shortCode || makeShortCode(record.id),
+    record.fields.fullName || "",
+    record.fields.phoneNumber || "",
+    record.fields.emailAddress || "",
+    record.fields.department || "",
+    record.fields.relevantExperience || "",
+    record.fields.wouldYouLikeToLead || "",
+    record.status || "",
+    record.createdAt
+  ]);
+  return toCsv(headers, rows);
 }
 
 function hasCommunicationsConsent(record) {
@@ -1134,7 +1190,21 @@ async function handleApi(req, res, url) {
     const db = await readDb();
     const ctx = requireAdminSession(req, res, db, "export_data");
     if (!ctx) return true;
-    send(res, 200, csv(db.submissions), "text/csv; charset=utf-8");
+    const type = url.searchParams.get("type");
+    let body;
+    let filename;
+    if (type === "community") {
+      body = csvCommunity(db.submissions.filter(record => record.type === "community"));
+      filename = "harvesters-akure-communities.csv";
+    } else if (type === "workforce") {
+      body = csvWorkforce(db.submissions.filter(record => record.type === "workforce"));
+      filename = "harvesters-akure-workforce.csv";
+    } else {
+      body = csv(db.submissions);
+      filename = "harvesters-akure-submissions.csv";
+    }
+    res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+    send(res, 200, body, "text/csv; charset=utf-8");
     return true;
   }
 

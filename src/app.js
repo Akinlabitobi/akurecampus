@@ -267,6 +267,20 @@ function recordCode(record) {
   return record.shortCode || String(record.id || "").replace(/[^a-z0-9]/gi, "").slice(0, 6).toUpperCase();
 }
 
+// Groups a table by one or more fields (e.g. community, then name within
+// each community) rather than the default created-at order, so an admin
+// scanning the list sees everyone in the same community/department
+// together instead of interleaved by signup time.
+function sortByFields(records, getters) {
+  return [...records].sort((a, b) => {
+    for (const get of getters) {
+      const diff = String(get(a) || "").localeCompare(String(get(b) || ""));
+      if (diff) return diff;
+    }
+    return 0;
+  });
+}
+
 function shell(content) {
   return `
     <nav class="topbar">
@@ -764,7 +778,7 @@ function dashboard() {
             <span class="label">Dashboard</span>
             <h1>${tabs.find(([id]) => id === activeDashboard)?.[1] || "Overview"}</h1>
           </div>
-          ${can("export_data") ? `<button class="btn primary" data-export>Export CSV</button>` : ""}
+          ${can("export_data") ? `<button class="btn primary" data-export>${activeDashboard === "communities" ? "Export Communities CSV" : activeDashboard === "workforce" ? "Export Workforce CSV" : "Export CSV"}</button>` : ""}
         </header>
         ${adminSession.mustChangePassword ? passwordNudge() : ""}
         ${dashboardContent()}
@@ -800,34 +814,40 @@ function dashboardContent() {
     `;
   }
   if (activeDashboard === "communities") {
-    const records = submissions.filter(row => row.type === "community");
+    const records = sortByFields(submissions.filter(row => row.type === "community"), [
+      row => row.fields.preferredCommunity,
+      row => row.fields.fullName
+    ]);
     const rows = records.map(row => [recordCode(row), row.fields.fullName || "-", row.fields.phoneNumber || "-", row.fields.emailAddress || "-", row.fields.preferredCommunity || "-", row.fields.areaInAkure || "-", row.fields.wouldYouLikeToLead || "-", new Date(row.createdAt).toLocaleDateString()]);
-    return `<div class="table">${editableTable(["Code", "Name", "Phone", "Email", "Community", "Area", "Wants to Lead", "Date"], rows, records)}</div>`;
+    return `${editableTable(["Code", "Name", "Phone", "Email", "Community", "Area", "Wants to Lead", "Date"], rows, records)}`;
   }
   if (activeDashboard === "workforce") {
-    const records = submissions.filter(row => row.type === "workforce");
+    const records = sortByFields(submissions.filter(row => row.type === "workforce"), [
+      row => row.fields.department,
+      row => row.fields.fullName
+    ]);
     const rows = records.map(row => [recordCode(row), row.fields.fullName || "-", row.fields.phoneNumber || "-", row.fields.emailAddress || "-", row.fields.department || "-", row.fields.relevantExperience || "-", row.fields.wouldYouLikeToLead || "-", row.status]);
-    return `<div class="table">${editableTable(["Code", "Name", "Phone", "Email", "Department", "Experience", "Wants to Lead", "Status"], rows, records)}</div>`;
+    return `${editableTable(["Code", "Name", "Phone", "Email", "Department", "Experience", "Wants to Lead", "Status"], rows, records)}`;
   }
   if (activeDashboard === "attendance") {
     const records = submissions.filter(row => row.type === "attendance");
     const rows = records.map(row => [row.fields.name || "-", row.fields.attendanceCode || row.fields.shortCode || "-", row.fields.phone || "-", row.fields.department || "-", row.fields.service || "-", new Date(row.createdAt).toLocaleString()]);
-    return `<div class="metric-grid"><article class="metric large"><span>Today's Code</span><strong>${dashboardData.dailyAttendance?.code || "-"}</strong><small>${dashboardData.dailyAttendance?.date || ""}</small></article><article class="metric large"><span>Total Check-Ins</span><strong>${metrics.attendance}</strong><small>attendance records</small></article></div><div class="table">${editableTable(["Name", "Code", "Phone", "Department", "Service", "Time"], rows, records)}</div>`;
+    return `<div class="metric-grid"><article class="metric large"><span>Today's Code</span><strong>${dashboardData.dailyAttendance?.code || "-"}</strong><small>${dashboardData.dailyAttendance?.date || ""}</small></article><article class="metric large"><span>Total Check-Ins</span><strong>${metrics.attendance}</strong><small>attendance records</small></article></div>${editableTable(["Name", "Code", "Phone", "Department", "Service", "Time"], rows, records)}`;
   }
   if (activeDashboard === "giving") {
     const records = submissions.filter(row => ["giving", "partnership"].includes(row.type));
     const rows = records.map(row => [row.type, recordCode(row), row.fields.fullName || "-", row.fields.phoneNumber || "-", row.fields.fund || row.fields.partnershipType || "-", row.fields.amount ? money(row.fields.amount) : "-", new Date(row.createdAt).toLocaleDateString()]);
-    return `<div class="metric-grid"><article class="metric large"><span>Total Giving</span><strong>${money(metrics.giving)}</strong><small>${metrics.fundsPercent}% funded</small></article><article class="metric large"><span>Partners</span><strong>${metrics.partnership}</strong><small>active interest</small></article></div><div class="table">${editableTable(["Type", "Code", "Name", "Phone", "Category", "Amount", "Date"], rows, records)}</div>`;
+    return `<div class="metric-grid"><article class="metric large"><span>Total Giving</span><strong>${money(metrics.giving)}</strong><small>${metrics.fundsPercent}% funded</small></article><article class="metric large"><span>Partners</span><strong>${metrics.partnership}</strong><small>active interest</small></article></div>${editableTable(["Type", "Code", "Name", "Phone", "Category", "Amount", "Date"], rows, records)}`;
   }
   if (activeDashboard === "care") {
     const records = submissions.filter(row => ["counselling", "nlp", "contact"].includes(row.type));
     const rows = records.map(row => [row.type, recordCode(row), row.fields.fullName || "-", row.fields.phoneNumber || row.fields.emailAddress || "-", row.fields.careArea || row.fields.prayerFocus || row.fields.subject || "-", row.status]);
-    return `<div class="table">${editableTable(["Type", "Code", "Name", "Contact", "Category", "Status"], rows, records)}</div>`;
+    return `${editableTable(["Type", "Code", "Name", "Contact", "Category", "Status"], rows, records)}`;
   }
   if (activeDashboard === "newsletter") {
     const records = submissions.filter(row => row.type === "newsletter");
     const rows = records.map(row => [recordCode(row), row.fields.emailAddress || row.fields.email || "-", new Date(row.createdAt).toLocaleString()]);
-    return `<div class="metric-grid"><article class="metric large"><span>Newsletter Signups</span><strong>${metrics.newsletter}</strong><small>footer email opt-ins</small></article></div><div class="table">${editableTable(["Code", "Email", "Date"], rows, records)}</div>`;
+    return `<div class="metric-grid"><article class="metric large"><span>Newsletter Signups</span><strong>${metrics.newsletter}</strong><small>footer email opt-ins</small></article></div>${editableTable(["Code", "Email", "Date"], rows, records)}`;
   }
   const canManageContent = can("manage_content");
   const launchHeaders = ["Item", "Type", "Status", "Due", ...(canManageContent ? ["Actions"] : [])];
@@ -866,7 +886,12 @@ function editableTable(headers, rows, records) {
         return `<tr>${row.map(cell => `<td>${cell}</td>`).join("")}${actionsCell}</tr>`;
       }).join("")
     : `<tr><td colspan="${head.length}">No records yet.</td></tr>`;
-  return `<table><thead><tr>${head.map(h => `<th>${h}</th>`).join("")}</tr></thead><tbody>${body}</tbody></table>`;
+  // Wide tables scroll horizontally rather than squeezing off the page (see
+  // .dashboard-main / .table in styles.css), but a scrollbar alone is easy
+  // to miss -- this line makes "there's more to the right" impossible to
+  // miss instead of relying on a thin bar admins might not notice.
+  const hint = showActions ? `<p class="table-scroll-hint">Scroll right to edit status or delete &rarr;</p>` : "";
+  return `${hint}<div class="table"><table><thead><tr>${head.map(h => `<th>${h}</th>`).join("")}</tr></thead><tbody>${body}</tbody></table></div>`;
 }
 
 function launchItemForm(editing) {
@@ -1149,7 +1174,8 @@ function render() {
     document.querySelector("#form")?.scrollIntoView({ behavior: "smooth", block: "start" });
   }));
   document.querySelector("[data-export]")?.addEventListener("click", () => {
-    window.location.href = "/api/export";
+    const type = activeDashboard === "communities" ? "community" : activeDashboard === "workforce" ? "workforce" : "";
+    window.location.href = type ? `/api/export?type=${type}` : "/api/export";
   });
   const menu = document.querySelector("[data-menu]");
   if (menu) menu.addEventListener("click", () => {
