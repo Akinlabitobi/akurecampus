@@ -1,5 +1,5 @@
 import * as THREE from "three";
-import { externalLinks } from "./config.js";
+import { externalLinks, contactInfo, socialLinks } from "./config.js";
 
 const navItems = [
   ["home", "Home"],
@@ -119,6 +119,9 @@ let selectedChoice = { community: "", workforce: "" };
 function icon(name) {
   const paths = {
     arrow: '<path d="M5 12h14"></path><path d="m12 5 7 7-7 7"></path>',
+    facebook: '<path d="M18 2h-3a5 5 0 0 0-5 5v3H7v4h3v8h4v-8h3l1-4h-4V7a1 1 0 0 1 1-1h3z"></path>',
+    instagram: '<rect width="20" height="20" x="2" y="2" rx="5"></rect><path d="M16 11.4A4 4 0 1 1 12.6 8 4 4 0 0 1 16 11.4z"></path><path d="M17.5 6.5h.01"></path>',
+    tiktok: '<path d="M16 3a5 5 0 0 0 5 5"></path><path d="M16 3v12a5 5 0 1 1-5-5"></path>',
     users: '<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"></path><circle cx="9" cy="7" r="4"></circle><path d="M22 21v-2a4 4 0 0 0-3-3.87"></path>',
     heart: '<path d="M2 9.5a5.5 5.5 0 0 1 9.6-3.7.6.6 0 0 0 .8 0A5.5 5.5 0 0 1 22 9.5c0 2.3-1.5 4-3 5.5l-5.5 5.3a2 2 0 0 1-3 0L5 15c-1.5-1.5-3-3.2-3-5.5"></path>',
     briefcase: '<path d="M16 20V4a2 2 0 0 0-2-2h-4a2 2 0 0 0-2 2v16"></path><rect x="2" y="6" width="20" height="14" rx="2"></rect>',
@@ -685,8 +688,9 @@ function contactPage() {
       <div class="container split">
         <div class="contact-list">
           <div>${icon("map")}<span>Akure, Ondo State, Nigeria</span></div>
-          <div>${icon("phone")}<span>+234 000 000 0000</span></div>
+          <a href="${contactInfo.phoneHref}">${icon("phone")}<span>${contactInfo.phone}</span></a>
           <div>${icon("mail")}<span>akure@harvestersng.org</span></div>
+          ${socialLinks.map(social => `<a href="${social.url}" target="_blank" rel="noopener noreferrer">${icon(social.name.toLowerCase())}<span>${social.name} <strong>${social.handle}</strong></span></a>`).join("")}
         </div>
         ${formMarkup("Send a Message", ["Full name", "Email address", "Subject", "Message"], "contact")}
       </div>
@@ -1046,7 +1050,7 @@ function footer() {
         <div><img src="/logo-white.png" alt="Harvesters Akure" /><p>A campus of Harvesters International Christian Centre, coming to Akure.</p></div>
         <div><h4>The Church</h4><button data-nav="about">About Harvesters Akure</button><button data-nav="nlp">Next Level Prayers</button><button data-nav="gallery">Gallery</button></div>
         <div><h4>Get Involved</h4><button data-nav="communities">Join a Community</button><button data-nav="workforce">Join the Workforce</button><button data-nav="partnership">Partner With Us</button></div>
-        <div><h4>Contact</h4><p>Akure, Ondo State</p><p>+234 000 000 0000</p><p>akure@harvestersng.org</p><button data-nav="dashboard">Team Dashboard</button><a href="/callcentre/">Outreach Call Centre</a></div>
+        <div><h4>Contact</h4><p>Akure, Ondo State</p><a href="${contactInfo.phoneHref}">${contactInfo.phone}</a><p>akure@harvestersng.org</p><div class="footer-social">${socialLinks.map(social => `<a href="${social.url}" target="_blank" rel="noopener noreferrer" aria-label="${social.name} ${social.handle}" title="${social.name} ${social.handle}">${icon(social.name.toLowerCase())}</a>`).join("")}</div><button data-nav="dashboard">Team Dashboard</button><a href="/callcentre/">Outreach Call Centre</a></div>
       </div>
       <div class="copyright">© 2026 Harvesters Akure. A campus of Harvesters International Christian Centre.</div>
     </footer>
