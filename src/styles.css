@@ -529,6 +529,43 @@ h3 {
   line-height: 1.7;
 }
 
+.intro-grid article {
+  position: relative;
+  transition: box-shadow 0.2s ease;
+}
+
+.intro-grid article:hover {
+  box-shadow: 0 22px 50px rgba(7, 30, 61, 0.16);
+}
+
+.intro-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 14px;
+  color: var(--red);
+  font-size: 0.92rem;
+  font-weight: 700;
+  text-decoration: none;
+}
+
+/* Stretch the link over the whole card so the entire card is clickable. */
+.intro-link::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: 8px;
+}
+
+.intro-link:focus-visible {
+  outline: none;
+}
+
+.intro-link:focus-visible::after {
+  outline: 2px solid var(--navy);
+  outline-offset: 2px;
+}
+
 .alert-band {
   padding: 18px 24px;
   color: var(--white);
@@ -1897,4 +1934,100 @@ footer p {
   .permission-grid {
     grid-template-columns: 1fr;
   }
+}
+
+/* Community / department picker: the signup form is hidden until a choice
+   is made, then opens with that choice locked in. */
+.pill-grid button {
+  cursor: pointer;
+  transition: border-color 0.2s ease, background 0.2s ease, color 0.2s ease;
+}
+
+.pill-grid button:hover {
+  border-color: var(--red);
+}
+
+.pill-grid button.active {
+  color: var(--white);
+  background: var(--red);
+  border-color: var(--red);
+}
+
+.card.compact.selected {
+  border-color: var(--red);
+  box-shadow: 0 0 0 2px var(--red);
+}
+
+body.modal-open {
+  overflow: hidden;
+}
+
+.form-modal {
+  position: fixed;
+  inset: 0;
+  z-index: 1000;
+  display: grid;
+  place-items: center;
+  padding: 16px;
+  overflow-y: auto;
+  background: rgba(7, 30, 61, 0.6);
+  animation: modal-fade 0.2s ease;
+}
+
+.form-modal-panel {
+  position: relative;
+  width: min(560px, 100%);
+  margin: auto;
+  animation: modal-rise 0.25s ease;
+}
+
+.form-modal-panel .form {
+  padding-top: 36px;
+  box-shadow: 0 30px 80px rgba(7, 30, 61, 0.35);
+}
+
+.form-modal-close {
+  position: absolute;
+  top: 8px;
+  right: 10px;
+  z-index: 1;
+  width: 36px;
+  height: 36px;
+  border: 0;
+  border-radius: 50%;
+  color: var(--navy);
+  background: var(--soft);
+  font-size: 1.5rem;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.form-modal-close:hover {
+  color: var(--white);
+  background: var(--red);
+}
+
+@keyframes modal-fade {
+  from { opacity: 0; }
+}
+
+@keyframes modal-rise {
+  from { opacity: 0; transform: translateY(16px); }
+}
+
+.locked-field {
+  display: flex;
+  gap: 10px;
+}
+
+.form .locked-field input[readonly] {
+  flex: 1;
+  color: var(--navy);
+  font-weight: 700;
+  background: var(--soft);
+  cursor: not-allowed;
+}
+
+.locked-field .btn {
+  flex: none;
 }

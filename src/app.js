@@ -112,6 +112,9 @@ let broadcastAudience = null;
 let broadcastBusy = false;
 let broadcastNote = "";
 let broadcastNoteType = "";
+// The community/department picked on the Communities or Workforce page. The
+// signup form stays hidden until one is picked, then opens with it locked in.
+let selectedChoice = { community: "", workforce: "" };
 
 function icon(name) {
   const paths = {
@@ -131,6 +134,7 @@ function icon(name) {
 }
 
 function navigate(view, options = {}) {
+  if (view !== activeView) selectedChoice = { community: "", workforce: "" };
   activeView = view;
   menuOpen = false;
   window.scrollTo({ top: 0, behavior: "smooth" });
@@ -286,7 +290,7 @@ function shell(content) {
     <nav class="topbar">
       <a class="brand" href="#" data-nav="home" aria-label="Harvesters Akure home">
         <img src="/logo-black.png" alt="Harvesters Akure" />
-        <span>Akure</span>
+        
       </a>
       <div class="navlinks ${menuOpen ? "open" : ""}">
         ${navItems.map(([id, label]) => `<button class="${activeView === id ? "active" : ""}" data-nav="${id}">${label}</button>`).join("")}
@@ -311,7 +315,7 @@ function home() {
       <div class="container hero-inner">
         <div class="hero-copy">
           <div class="eyebrow"><span></span> Harvesters Akure</div>
-          <h1>Come home to worship in Akure.</h1>
+          <h1>There is a place for you here.</h1>
           <p>A Harvesters family is gathering in the city for prayer, worship, friendship, service, and spiritual growth.</p>
           <div class="hero-actions">
             <button class="btn primary xl" data-nav="communities">Join Community ${icon("arrow")}</button>
@@ -372,21 +376,22 @@ function visitSection() {
 
 function homeIntro() {
   const items = [
-    ["Build", "Help prepare the people, systems, and service teams before launch."],
-    ["Belong", "Find a community for prayer, friendship, and steady spiritual growth."],
-    ["Serve", "Join a department and bring your gifts into the room."]
+    ["Build", "Help prepare the people, systems, and service teams before launch.", "workforce", "Join the Workforce"],
+    ["Belong", "Find a community for prayer, friendship, and steady spiritual growth.", "communities", "Join a Community"],
+    ["Serve", "Join a department and bring your gifts into the room.", "workforce", "Join the Workforce"]
   ];
   return `
     <section class="home-intro">
       <div class="container intro-grid">
         <div>
           <span class="label">A Real Home Base</span>
-          <h2>Simple next steps for a city-wide launch.</h2>
+          <h2>Take Your Next Step For A City - Wide Launch.</h2>
         </div>
-        ${items.map(([title, text]) => `
+        ${items.map(([title, text, view, cta]) => `
           <article>
             <strong>${title}</strong>
             <p>${text}</p>
+            <a class="intro-link" href="#${view}" data-nav="${view}">${cta} ${icon("arrow")}</a>
           </article>
         `).join("")}
       </div>
@@ -556,10 +561,10 @@ function communityPage() {
   return `
     <section class="section">
       <div class="container card-grid two">
-        ${communities.map(([title, text]) => `<article class="card compact"><h3>${title}</h3><p>${text}</p><button class="btn secondary block" data-focus-form>Register Interest</button></article>`).join("")}
+        ${communities.map(([title, text]) => `<article class="card compact ${selectedChoice.community === title ? "selected" : ""}"><h3>${title}</h3><p>${text}</p><button class="btn secondary block" data-choose="community" data-choice="${title}">Register Interest</button></article>`).join("")}
       </div>
     </section>
-    ${formPage("Community Signup", ["Full name", "Phone number", "Email address", "Preferred community", "Area in Akure", "Date of Birth", "Would you like to lead?"], "community")}
+    ${lockedFormModal("Community Signup", ["Full name", "Phone number", "Email address", "Preferred community", "Area in Akure", "Date of Birth", "Would you like to lead?"], "community", "Preferred community")}
   `;
 }
 
@@ -605,10 +610,25 @@ function workforcePage() {
     <section class="section soft">
       <div class="container">
         <div class="center"><span class="label">Departments</span><h2>Serve With Your Gifts</h2></div>
-        <div class="pill-grid">${departments.map(item => `<button>${item}</button>`).join("")}</div>
+        <div class="pill-grid">${departments.map(item => `<button class="${selectedChoice.workforce === item ? "active" : ""}" data-choose="workforce" data-choice="${item}">${item}</button>`).join("")}</div>
       </div>
     </section>
-    ${formPage("Workforce Application", ["Full name", "Phone number", "Email address", "Department", "Relevant experience", "Would you like to lead?"], "workforce")}
+    ${lockedFormModal("Workforce Application", ["Full name", "Phone number", "Email address", "Department", "Relevant experience", "Would you like to lead?"], "workforce", "Department")}
+  `;
+}
+
+// Nothing is rendered until a community/department has been picked; then the
+// form opens in a pop-up with that pick filled into `lockedField`, read-only.
+function lockedFormModal(title, fields, type, lockedField) {
+  const choice = selectedChoice[type];
+  if (!choice) return "";
+  return `
+    <div class="form-modal" data-close-choice>
+      <div class="form-modal-panel" role="dialog" aria-modal="true" aria-label="${title}">
+        <button class="form-modal-close" type="button" data-close-choice aria-label="Close">&times;</button>
+        ${formMarkup(title, fields, type, { [lockedField]: choice })}
+      </div>
+    </div>
   `;
 }
 
@@ -678,11 +698,11 @@ function formPage(title, fields, type) {
   return `<section class="section" id="form"><div class="container narrow">${formMarkup(title, fields, type)}</div></section>`;
 }
 
-function formMarkup(title, fields, type) {
+function formMarkup(title, fields, type, locked = {}) {
   return `
     <form class="form" data-api-form data-form-type="${type}">
       <h3>${title}</h3>
-      ${fields.map(field => formField(field, type)).join("")}
+      ${fields.map(field => field in locked ? lockedField(field, locked[field]) : formField(field, type)).join("")}
       ${["community", "counselling"].includes(type) ? `<label class="consent"><input name="communicationsConsent" type="checkbox" /> <span>I agree to receive Harvesters Akure updates by SMS and email.</span></label>` : ""}
       <button class="btn primary block" type="submit">Submit ${icon("arrow")}</button>
       <p class="form-note">Submissions save to the local database and appear in the dashboard.</p>
@@ -701,6 +721,10 @@ function formField(field, type) {
     return `<label><span>${field}</span><select name="${name}"><option value="">Select an option</option><option value="Yes">Yes</option><option value="No">No</option></select></label>`;
   }
   return `<label><span>${field}</span><input name="${name}" type="${dateOfBirth ? "date" : email ? "email" : "text"}" ${tall ? "data-tall" : ""} ${required ? "required" : ""} placeholder="${dateOfBirth ? "" : field}" /></label>`;
+}
+
+function lockedField(field, value) {
+  return `<label><span>${field}</span><div class="locked-field"><input name="${fieldName(field)}" value="${value}" readonly /><button class="btn ghost-dark" type="button" data-close-choice>Change</button></div></label>`;
 }
 
 function externalLinkButton(label, url, classes = "primary") {
@@ -1155,6 +1179,18 @@ function initHeroScene() {
   };
 }
 
+function closeChoiceModal() {
+  selectedChoice = { community: "", workforce: "" };
+  // Keep the reader where they were in the list rather than jumping to the top.
+  const scrollY = window.scrollY;
+  render();
+  window.scrollTo(0, scrollY);
+}
+
+document.addEventListener("keydown", event => {
+  if (event.key === "Escape" && document.querySelector(".form-modal")) closeChoiceModal();
+});
+
 function render() {
   if (heroSceneCleanup) {
     heroSceneCleanup();
@@ -1173,6 +1209,18 @@ function render() {
   document.querySelectorAll("[data-focus-form]").forEach(el => el.addEventListener("click", () => {
     document.querySelector("#form")?.scrollIntoView({ behavior: "smooth", block: "start" });
   }));
+  document.querySelectorAll("[data-choose]").forEach(el => el.addEventListener("click", () => {
+    selectedChoice[el.dataset.choose] = el.dataset.choice;
+    render();
+    document.querySelector(".form-modal input:not([readonly])")?.focus();
+  }));
+  document.querySelectorAll("[data-close-choice]").forEach(el => el.addEventListener("click", event => {
+    // The backdrop carries data-close-choice too; ignore clicks that land
+    // inside the panel and merely bubble up to it.
+    if (event.target !== el) return;
+    closeChoiceModal();
+  }));
+  document.body.classList.toggle("modal-open", Boolean(document.querySelector(".form-modal")));
   document.querySelector("[data-export]")?.addEventListener("click", () => {
     const type = activeDashboard === "communities" ? "community" : activeDashboard === "workforce" ? "workforce" : "";
     window.location.href = type ? `/api/export?type=${type}` : "/api/export";
@@ -1185,7 +1233,7 @@ function render() {
   document.querySelectorAll("[data-api-form]").forEach(form => form.addEventListener("submit", async event => {
     event.preventDefault();
     const note = form.querySelector(".form-note") || document.createElement("p");
-    const button = form.querySelector("button[type='submit'], button");
+    const button = form.querySelector("button[type='submit']") || form.querySelector("button");
     const fields = Object.fromEntries(new FormData(form).entries());
     if (!fields.name && fields.fullName) fields.name = fields.fullName;
     const submissionId = form.dataset.submissionId || crypto.randomUUID();
