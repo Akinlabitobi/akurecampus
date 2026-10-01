@@ -420,8 +420,16 @@ function addAuditLog(db, admin, action, detail = "") {
   db.auditLog = db.auditLog.slice(0, 200);
 }
 
+// On Vercel every request reaches the function through Vercel's proxy, so
+// the socket address is the proxy's, shared by everyone -- five wrong
+// guesses from anywhere locked the account for all. Vercel sets
+// x-forwarded-for to the visitor's real address (and overwrites any value a
+// visitor sends), so lock per visitor instead.
 function loginAttemptKey(req, email) {
-  return `${req.socket?.remoteAddress || "unknown"}:${email}`;
+  const visitor = process.env.VERCEL && req.headers["x-forwarded-for"]
+    ? String(req.headers["x-forwarded-for"]).split(",")[0].trim()
+    : req.socket?.remoteAddress;
+  return `${visitor || "unknown"}:${email}`;
 }
 
 function isLoginLocked(key) {
