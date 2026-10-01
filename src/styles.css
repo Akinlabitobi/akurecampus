@@ -2571,3 +2571,57 @@ body.modal-open {
 @keyframes toast-in {
   from { opacity: 0; transform: translate(-50%, 12px); }
 }
+
+/* Install pop-up that slides up from the bottom of the screen. */
+.install-banner {
+  position: fixed;
+  left: 50%;
+  bottom: 16px;
+  z-index: 150;
+  display: grid;
+  grid-template-columns: auto 1fr;
+  align-items: center;
+  gap: 12px 14px;
+  width: min(520px, calc(100% - 32px));
+  padding: 16px;
+  background: var(--white);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  box-shadow: 0 20px 50px rgba(7, 30, 61, 0.28);
+  transform: translateX(-50%);
+  animation: banner-up 0.35s ease;
+}
+
+.install-banner img {
+  width: 52px;
+  height: 52px;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+}
+
+.install-banner strong {
+  display: block;
+  color: var(--navy);
+}
+
+.install-banner span {
+  display: block;
+  margin-top: 2px;
+  color: var(--muted);
+  font-size: 0.86rem;
+  line-height: 1.4;
+}
+
+.install-banner-actions {
+  grid-column: 1 / -1;
+  display: flex;
+  gap: 10px;
+}
+
+.install-banner-actions .btn {
+  flex: 1;
+}
+
+@keyframes banner-up {
+  from { opacity: 0; transform: translate(-50%, 24px); }
+}

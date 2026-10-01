@@ -351,7 +351,7 @@ function shell(content) {
       </a>
       <div class="navlinks ${menuOpen ? "open" : ""}">
         ${navItems.map(([id, label]) => `<button class="${activeView === id ? "active" : ""}" data-nav="${id}">${label}</button>`).join("")}
-        <button class="install-link" type="button" data-install ${canInstall() ? "" : "hidden"}>${icon("download")} Install App</button>
+        <button class="install-link" type="button" data-install ${isStandalone() ? "hidden" : ""}>${icon("download")} Install App</button>
       </div>
       <div class="actions">
         <button class="btn primary" data-nav="communities">Join Community</button>
@@ -1511,7 +1511,7 @@ function footer() {
       <div class="footer-main">
         <div><img src="/logo-white.png" alt="Harvesters Akure" /><p>A campus of Harvesters International Christian Centre, coming to Akure.</p></div>
         <div><h4>The Church</h4><button data-nav="about">About Harvesters Akure</button><button data-nav="nlp">Next Level Prayers</button><button data-nav="gallery">Gallery</button></div>
-        <div><h4>Get Involved</h4><button data-nav="communities">Join a Community</button><button data-nav="workforce">Join the Workforce</button><button data-nav="partnership">Partner With Us</button><button data-nav="birthdays">Birthday Celebrations</button><button data-nav="profile">My Profile</button><button type="button" data-install ${canInstall() ? "" : "hidden"}>Install the App</button></div>
+        <div><h4>Get Involved</h4><button data-nav="communities">Join a Community</button><button data-nav="workforce">Join the Workforce</button><button data-nav="partnership">Partner With Us</button><button data-nav="birthdays">Birthday Celebrations</button><button data-nav="profile">My Profile</button><button type="button" data-install ${isStandalone() ? "hidden" : ""}>Install the App</button></div>
         <div><h4>Contact</h4><p>Akure, Ondo State</p><a href="${contactInfo.phoneHref}">${contactInfo.phone}</a><p>akure@harvestersng.org</p><div class="footer-social">${socialLinks.map(social => `<a href="${social.url}" target="_blank" rel="noopener noreferrer" aria-label="${social.name} ${social.handle}" title="${social.name} ${social.handle}">${icon(social.name.toLowerCase())}</a>`).join("")}</div><button data-nav="dashboard">Team Dashboard</button><a href="/callcentre/">Outreach Call Centre</a></div>
       </div>
       <div class="copyright">© 2026 Harvesters Akure. A campus of Harvesters International Christian Centre.</div>
@@ -2263,25 +2263,99 @@ async function sendSavedForms() {
   failed.forEach(item => toast(`Your saved ${item.label.toLowerCase()} couldn't be sent: ${item.error}`, "error"));
 }
 
+// How installing works depends entirely on the browser:
+//   - Chrome, Edge, Samsung Internet (Android and computers) hand the page a
+//     `beforeinstallprompt` event, which lets our own button open the real
+//     install dialog. Because we take that over, the browser's own automatic
+//     install bar no longer appears -- so we show our own install pop-up.
+//   - iPhone/iPad never allow a page to install itself; people must use
+//     Safari's Share > Add to Home Screen, so we show those steps.
+//   - In-app browsers (inside WhatsApp, Facebook, Instagram...) can't
+//     install at all; people need to open the link in their real browser.
+// The menu/footer button is always available (unless already installed) and
+// falls back to the right written steps whenever no dialog can be opened.
 const isStandalone = () => window.matchMedia("(display-mode: standalone)").matches || window.navigator.standalone === true;
-// iPhones and iPads (including iPads that report themselves as a Mac).
-const isAppleMobile = () => /iphone|ipad|ipod/i.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
-// Chrome, Edge and Android hand us an install prompt to trigger later.
+const userAgent = navigator.userAgent;
+const isAppleMobile = () => /iphone|ipad|ipod/i.test(userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+const isAndroid = () => /android/i.test(userAgent);
+const isInAppBrowser = () => /FBAN|FBAV|FB_IAB|Instagram|WhatsApp|Line\/|Snapchat|TikTok|musical_ly|; wv\)/i.test(userAgent);
+const INSTALL_DISMISS_KEY = "ha-install-dismissed";
+const INSTALL_DISMISS_DAYS = 14;
 let deferredInstall = null;
 
-function canInstall() {
-  return !isStandalone() && Boolean(deferredInstall || isAppleMobile());
+function installPlatform() {
+  if (isInAppBrowser()) return isAppleMobile() ? "in-app-ios" : "in-app-android";
+  if (isAppleMobile()) return /CriOS|FxiOS|EdgiOS/i.test(userAgent) ? "ios-other" : "ios-safari";
+  if (isAndroid()) {
+    if (/SamsungBrowser/i.test(userAgent)) return "samsung";
+    if (/Firefox/i.test(userAgent)) return "android-firefox";
+    return "android-chrome";
+  }
+  if (/Firefox/i.test(userAgent)) return "desktop-firefox";
+  if (/Safari/i.test(userAgent) && !/Chrome|Chromium|Edg/i.test(userAgent)) return "desktop-safari";
+  return "desktop-chrome";
 }
 
-// The install buttons are always rendered (hidden) so this can show or hide
-// them without a full re-render, which would wipe anything being typed.
-function updateInstallButtons() {
-  document.querySelectorAll("[data-install]").forEach(button => {
-    button.hidden = !canInstall();
-  });
+const INSTALL_STEPS = {
+  "ios-safari": [
+    "Tap the <strong>Share</strong> button (the square with an arrow) at the bottom of Safari.",
+    "Scroll down and tap <strong>Add to Home Screen</strong>.",
+    "Tap <strong>Add</strong>. The app appears on your home screen."
+  ],
+  "ios-other": [
+    "Tap the <strong>Share</strong> button (the square with an arrow) in the address bar.",
+    "Tap <strong>Add to Home Screen</strong>. If you don't see it, open this page in <strong>Safari</strong> and try again.",
+    "Tap <strong>Add</strong>."
+  ],
+  "in-app-ios": [
+    "You're viewing this inside another app, which can't install apps.",
+    "Tap the <strong>&middot;&middot;&middot;</strong> or <strong>Share</strong> button and choose <strong>Open in Safari</strong>.",
+    "In Safari, tap <strong>Share</strong> then <strong>Add to Home Screen</strong>."
+  ],
+  "in-app-android": [
+    "You're viewing this inside another app, which can't install apps.",
+    "Tap the <strong>&#8942;</strong> menu (top right) and choose <strong>Open in Chrome</strong> (or <em>Open in browser</em>).",
+    "In Chrome, tap <strong>Install App</strong> on this page."
+  ],
+  "android-chrome": [
+    "Tap the <strong>&#8942;</strong> menu at the top right of Chrome.",
+    "Tap <strong>Install app</strong> (or <strong>Add to Home screen</strong>).",
+    "Tap <strong>Install</strong>. The app appears on your home screen."
+  ],
+  samsung: [
+    "Tap the <strong>&#8801;</strong> menu at the bottom of the screen.",
+    "Tap <strong>Add page to</strong>, then <strong>Home screen</strong>.",
+    "Tap <strong>Add</strong>."
+  ],
+  "android-firefox": [
+    "Tap the <strong>&#8942;</strong> menu.",
+    "Tap <strong>Install</strong> (or <strong>Add to Home screen</strong>).",
+    "Tap <strong>Add</strong>."
+  ],
+  "desktop-chrome": [
+    "Look for the <strong>install icon</strong> (a screen with a down arrow) at the right end of the address bar, and click it.",
+    "No icon? Open the <strong>&#8942;</strong> menu &rarr; <strong>Cast, save and share</strong> &rarr; <strong>Install page as app</strong> (in Edge: <strong>Apps</strong> &rarr; <strong>Install this site as an app</strong>).",
+    "Click <strong>Install</strong>. The app opens in its own window and appears in your Start menu or Dock."
+  ],
+  "desktop-safari": [
+    "In the menu bar, click <strong>File</strong>.",
+    "Click <strong>Add to Dock</strong>.",
+    "Click <strong>Add</strong>."
+  ],
+  "desktop-firefox": [
+    "Firefox on computers can't install web apps.",
+    "Open this site in <strong>Chrome</strong> or <strong>Edge</strong>, then click <strong>Install App</strong>."
+  ]
+};
+
+function closeMenuIfOpen() {
+  if (!menuOpen) return;
+  menuOpen = false;
+  document.querySelector(".navlinks")?.classList.remove("open");
 }
 
-function showAppleInstallSteps() {
+function showInstallSteps() {
+  const steps = INSTALL_STEPS[installPlatform()];
   const modal = document.createElement("div");
   modal.className = "form-modal";
   modal.innerHTML = `
@@ -2289,12 +2363,7 @@ function showAppleInstallSteps() {
       <button class="form-modal-close" type="button" aria-label="Close">&times;</button>
       <img src="/icons/icon-192.png" alt="" />
       <h3>Install Harvesters Akure</h3>
-      <ol>
-        <li>Tap the <strong>Share</strong> button <span aria-hidden="true">(the square with an arrow)</span> at the bottom of Safari.</li>
-        <li>Scroll down and tap <strong>Add to Home Screen</strong>.</li>
-        <li>Tap <strong>Add</strong>. The app appears on your home screen.</li>
-      </ol>
-      <p class="muted">Using Chrome on iPhone? Open this site in Safari first.</p>
+      <ol>${steps.map(step => `<li>${step}</li>`).join("")}</ol>
       <button class="btn primary block" type="button">Got it</button>
     </div>
   `;
@@ -2310,28 +2379,89 @@ function showAppleInstallSteps() {
 }
 
 async function installApp() {
-  if (menuOpen) {
-    menuOpen = false;
-    document.querySelector(".navlinks")?.classList.remove("open");
+  closeMenuIfOpen();
+  hideInstallBanner();
+  if (!deferredInstall) {
+    showInstallSteps();
+    return;
   }
-  if (deferredInstall) {
-    deferredInstall.prompt();
-    await deferredInstall.userChoice.catch(() => null);
-    deferredInstall = null;
-    updateInstallButtons();
-  } else if (isAppleMobile()) {
-    showAppleInstallSteps();
+  deferredInstall.prompt();
+  const choice = await deferredInstall.userChoice.catch(() => null);
+  deferredInstall = null;
+  if (choice?.outcome === "dismissed") rememberInstallDismissed();
+}
+
+function updateInstallButtons() {
+  document.querySelectorAll("[data-install]").forEach(button => {
+    button.hidden = isStandalone();
+  });
+}
+
+// ---- Automatic install pop-up ----
+
+function installRecentlyDismissed() {
+  try {
+    const at = Number(localStorage.getItem(INSTALL_DISMISS_KEY));
+    return Boolean(at) && Date.now() - at < INSTALL_DISMISS_DAYS * 86_400_000;
+  } catch {
+    return false;
   }
+}
+
+function rememberInstallDismissed() {
+  try {
+    localStorage.setItem(INSTALL_DISMISS_KEY, String(Date.now()));
+  } catch {
+    // private browsing: the pop-up may simply show again next visit
+  }
+}
+
+function hideInstallBanner() {
+  document.querySelector(".install-banner")?.remove();
+}
+
+function showInstallBanner() {
+  if (isStandalone() || installRecentlyDismissed() || activeView === "dashboard" || document.querySelector(".install-banner")) return;
+  const direct = Boolean(deferredInstall);
+  const banner = document.createElement("div");
+  banner.className = "install-banner";
+  banner.setAttribute("role", "dialog");
+  banner.setAttribute("aria-label", "Install the Harvesters Akure app");
+  banner.innerHTML = `
+    <img src="/icons/icon-192.png" alt="" />
+    <div>
+      <strong>Get the Harvesters Akure app</strong>
+      <span>${direct ? "Install it on your device for quick access, even on a weak connection." : "Add it to your home screen for quick access."}</span>
+    </div>
+    <div class="install-banner-actions">
+      <button class="btn primary small" type="button" data-banner-install>${direct ? "Install" : "Show me how"}</button>
+      <button class="btn ghost-dark small" type="button" data-banner-dismiss>Not now</button>
+    </div>
+  `;
+  banner.querySelector("[data-banner-install]").addEventListener("click", installApp);
+  banner.querySelector("[data-banner-dismiss]").addEventListener("click", () => {
+    rememberInstallDismissed();
+    hideInstallBanner();
+  });
+  document.body.appendChild(banner);
 }
 
 window.addEventListener("beforeinstallprompt", event => {
   event.preventDefault();
   deferredInstall = event;
   updateInstallButtons();
+  setTimeout(showInstallBanner, 2500);
 });
+
+// Browsers that never send beforeinstallprompt (iPhone, in-app browsers)
+// still get the pop-up, offering the written steps instead.
+if (!isStandalone() && (isAppleMobile() || isInAppBrowser())) {
+  setTimeout(showInstallBanner, 4000);
+}
 
 window.addEventListener("appinstalled", () => {
   deferredInstall = null;
+  hideInstallBanner();
   updateInstallButtons();
   toast("Harvesters Akure is installed. You'll find it on your home screen.", "success");
 });
