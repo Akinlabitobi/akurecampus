@@ -1,6 +1,7 @@
 import * as THREE from "three";
 import { externalLinks, contactInfo, socialLinks } from "./config.js";
 import { SHARE_PAGES } from "./share-meta.js";
+import { COMMUNITIES as communities } from "./communities.js";
 import { postOrQueue, flushOutbox } from "./offline-queue.js";
 
 const QUEUED_NOTE = "You're offline, so this has been saved on your device. It will be sent automatically when you're back online.";
@@ -56,32 +57,6 @@ const stats = [
   ["1", "Akure Campus"]
 ];
 
-const communities = [
-  ["Young Adults", "Career builders, students, creatives, and entrepreneurs growing together."],
-  ["Married Couples", "A warm circle for couples building faith, family, and friendship."],
-  ["Men of Purpose", "Men sharpening one another through prayer, service, and accountability."],
-  ["Women of Grace", "Women walking in wisdom, strength, leadership, and devotion."],
-  ["Teens", "A safe, energetic space for teenagers to encounter God and grow boldly."],
-  ["Prayer Circle", "Intercessors covering the campus, city, leaders, and launch team."],
-  ["Bible Study Group", "Digging into God's Word together, one book and one question at a time."],
-  ["Worship and Prayer Group", "People who love to seek God's presence through worship and prayer."],
-  ["Family and Marriage Enrichment", "Strengthening homes with godly wisdom for marriages, parenting, and family life."],
-  ["Accountability and Personal Growth", "Honest friendships that help you grow in character, habits, and faith."],
-  ["Young Professionals", "Early-career believers growing in faith, excellence, and influence at work."],
-  ["Business and Marketplace", "Entrepreneurs and professionals bringing kingdom values into business."],
-  ["Tech and Innovation", "Builders, coders, and problem-solvers using technology for good."],
-  ["Influencers and Creative Circle", "Content creators, artists, and storytellers shaping culture with purpose."],
-  ["Fashion and Lifestyle", "Style, beauty, and lifestyle enthusiasts expressing faith with excellence."],
-  ["Culinary and Catering", "Cooks, bakers, and caterers who love to serve people around the table."],
-  ["FUTA Cell", "A cell group meeting around FUTA and its surroundings."],
-  ["Ijoka Cell", "A cell group meeting around Ijoka and nearby streets."],
-  ["Lafe / Ondo Road Cell", "A cell group meeting around Lafe and the Ondo Road axis."],
-  ["Alagbaka Cell", "A cell group meeting around Alagbaka and the GRA."],
-  ["Oda Road Cell", "A cell group meeting around Oda Road and nearby areas."],
-  ["Oke Aro Cell", "A cell group meeting around Oke Aro and its surroundings."],
-  ["Oke Ijebu Cell", "A cell group meeting around Oke Ijebu and nearby areas."],
-  ["Sijuwade Cell", "A cell group meeting around Sijuwade and its surroundings."]
-];
 
 const departments = [
   "Protocol", "Guest Experience", "Choir", "Media", "Production", "Ushering",
@@ -114,9 +89,12 @@ const ALL_PERMISSIONS = ["view_dashboard", "edit_submissions", "delete_submissio
 const ROLE_DEFAULTS = {
   superadmin: ALL_PERMISSIONS.slice(),
   manager: ["view_dashboard", "edit_submissions", "manage_content", "export_data", "send_broadcasts"],
-  viewer: ["view_dashboard"]
+  viewer: ["view_dashboard"],
+  cell_leader: ["cell_reports"]
 };
+const ROLE_LABELS = { viewer: "Viewer", manager: "Manager", superadmin: "Superadmin", cell_leader: "Cell leader" };
 const PERMISSION_LABELS = {
+  cell_reports: "Cell reports",
   view_dashboard: "View dashboard",
   edit_submissions: "Edit submissions",
   delete_submissions: "Delete submissions",
@@ -167,6 +145,15 @@ let memberBusy = false;
 let memberEditing = false;
 // Admin Members tab: the person whose full profile is open, by group key.
 let selectedMemberKey = "";
+// Cell reports (dashboard): data from /api/cell/overview, the cell and date
+// being reported on, and the report being viewed.
+let cellData;
+let cellLoading = false;
+let cellChoice = "";
+let cellDate = "";
+let cellDraft = null;
+let cellReportView = "";
+let cellReportFilter = "";
 
 function icon(name) {
   const paths = {
@@ -261,6 +248,26 @@ async function loadAdmins(force = false) {
     adminsList = [];
   } finally {
     adminsLoading = false;
+    if (activeView === "dashboard") render();
+  }
+}
+
+async function loadCellData(force = false) {
+  if (cellLoading || (cellData && !force)) return;
+  cellLoading = true;
+  try {
+    const response = await fetch("/api/cell/overview");
+    const result = await response.json().catch(() => ({}));
+    if (response.status === 401) {
+      adminSession = null;
+      return;
+    }
+    if (!response.ok) throw new Error(result.error || "Could not load cell data.");
+    cellData = result;
+  } catch (error) {
+    cellData = { error: error.message };
+  } finally {
+    cellLoading = false;
     if (activeView === "dashboard") render();
   }
 }
@@ -1048,21 +1055,27 @@ function passwordNudge() {
 }
 
 function dashboard() {
+  // Cell leaders have no view_dashboard permission: they only get the two
+  // cell tabs, scoped by the server to their own cells.
+  const full = can("view_dashboard");
+  const cellTabs = full || adminSession.role === "cell_leader";
   const tabs = [
-    ["overview", "Overview", true],
-    ["members", "Members", true],
-    ["communities", "Communities", true],
-    ["workforce", "Workforce", true],
-    ["attendance", "Attendance", true],
-    ["birthdays", "Birthdays", true],
-    ["giving", "Giving", true],
-    ["care", "Care", true],
-    ["newsletter", "Newsletter", true],
-    ["content", "Content", true],
+    ["overview", "Overview", full],
+    ["members", "Members", full],
+    ["communities", "Communities", full],
+    ["cell-attendance", "Cell Attendance", cellTabs],
+    ["cell-reports", "Cell Reports", cellTabs],
+    ["workforce", "Workforce", full],
+    ["attendance", "Attendance", full],
+    ["birthdays", "Birthdays", full],
+    ["giving", "Giving", full],
+    ["care", "Care", full],
+    ["newsletter", "Newsletter", full],
+    ["content", "Content", full],
     ["broadcast", "Broadcast", can("send_broadcasts")],
     ["admins", "Admins", can("manage_admins")]
   ].filter(([, , visible]) => visible);
-  if (!tabs.some(([id]) => id === activeDashboard)) activeDashboard = "overview";
+  if (!tabs.some(([id]) => id === activeDashboard)) activeDashboard = tabs[0]?.[0] || "overview";
   return `
     <section class="dashboard-shell">
       <aside>
@@ -1071,7 +1084,7 @@ function dashboard() {
         ${tabs.map(([id, label]) => `<button class="${activeDashboard === id ? "active" : ""}" data-dash="${id}">${label}</button>`).join("")}
         <div class="admin-identity">
           <strong>${adminSession.name}</strong>
-          <small>${adminSession.role}</small>
+          <small>${ROLE_LABELS[adminSession.role] || adminSession.role}</small>
           <button class="btn ghost small" data-logout type="button">Sign Out</button>
         </div>
       </aside>
@@ -1081,7 +1094,7 @@ function dashboard() {
             <span class="label">Dashboard</span>
             <h1>${tabs.find(([id]) => id === activeDashboard)?.[1] || "Overview"}</h1>
           </div>
-          ${can("export_data") ? `<button class="btn primary" data-export>${activeDashboard === "communities" ? "Export Communities CSV" : activeDashboard === "workforce" ? "Export Workforce CSV" : activeDashboard === "birthdays" ? "Export Birthdays CSV" : "Export CSV"}</button>` : ""}
+          ${can("export_data") && !activeDashboard.startsWith("cell-") ? `<button class="btn primary" data-export>${activeDashboard === "communities" ? "Export Communities CSV" : activeDashboard === "workforce" ? "Export Workforce CSV" : activeDashboard === "birthdays" ? "Export Birthdays CSV" : "Export CSV"}</button>` : ""}
         </header>
         ${adminSession.mustChangePassword ? passwordNudge() : ""}
         ${dashboardContent()}
@@ -1091,6 +1104,8 @@ function dashboard() {
 }
 
 function dashboardContent() {
+  if (activeDashboard === "cell-attendance") return cellAttendanceTab();
+  if (activeDashboard === "cell-reports") return cellReportsTab();
   if (activeDashboard === "broadcast") return broadcastTab();
   if (activeDashboard === "admins") return adminsTab();
   if (!dashboardData) {
@@ -1359,6 +1374,310 @@ function birthdaysTab(submissions) {
   `;
 }
 
+// ---- Cell reports ----
+
+function sameCell(a, b) {
+  return String(a || "").trim().toLowerCase() === String(b || "").trim().toLowerCase();
+}
+
+function cellReportsFor(cell) {
+  return (cellData?.reports || []).filter(report => sameCell(report.cell, cell));
+}
+
+// A member's record at the cell's last few meetings (newest first): "P"
+// present, "A" absent, "-" not yet a member. `missed` counts consecutive
+// absences up to the latest meeting, for the follow-up list.
+function memberHistory(cell, memberId, count = 4) {
+  const held = cellReportsFor(cell).filter(report => report.held === "yes");
+  const marks = held.slice(0, count).map(report => report.present.includes(memberId) ? "P" : report.absent.includes(memberId) ? "A" : "-");
+  let missed = 0;
+  for (const report of held) {
+    if (!report.absent.includes(memberId)) break;
+    missed += 1;
+  }
+  return { marks, missed };
+}
+
+function followUps(cells) {
+  return cells.flatMap(cell => (cellData.members[cell] || [])
+    .map(member => ({ ...member, cell, missed: memberHistory(cell, member.id).missed }))
+    .filter(member => member.missed >= 3))
+    .sort((a, b) => b.missed - a.missed);
+}
+
+function historyDots(marks) {
+  if (!marks.length) return `<span class="history-dots muted">No meetings yet</span>`;
+  const labels = { P: "Present", A: "Absent", "-": "Not yet a member" };
+  return `<span class="history-dots" title="Last ${marks.length} meetings, newest first">${marks.map(mark => `<i class="dot-${mark === "-" ? "none" : mark}" title="${labels[mark]}"></i>`).join("")}</span>`;
+}
+
+function visitorRow(visitor = {}) {
+  return `
+    <div class="visitor-row" data-visitor-row>
+      <input name="visitorName" placeholder="Visitor's name" value="${escapeHtml(visitor.name || "")}" />
+      <input name="visitorPhone" type="tel" placeholder="Phone number" value="${escapeHtml(visitor.phone || "")}" />
+      <label class="permission-check"><input type="checkbox" name="visitorJoin" ${visitor.addToCell === false ? "" : "checked"} /> <span>Add to cell</span></label>
+      <button class="btn ghost-dark small" type="button" data-remove-visitor aria-label="Remove visitor">&times;</button>
+    </div>
+  `;
+}
+
+function cellDataNotice() {
+  if (!cellData) return `<div class="panel"><h3>Loading cells...</h3></div>`;
+  if (cellData.error) return `<div class="panel"><h3>Couldn't load cell data</h3><p class="muted">${escapeHtml(cellData.error)}</p></div>`;
+  return "";
+}
+
+function cellAttendanceTab() {
+  const notice = cellDataNotice();
+  if (notice) return notice;
+  const { cells, members } = cellData;
+  if (cells.length === 1) cellChoice = cells[0];
+  if (cellChoice && !cells.some(cell => sameCell(cell, cellChoice))) cellChoice = "";
+  if (!cellDate) cellDate = localDateKey(new Date());
+  const picker = `
+    <div class="panel cell-picker">
+      ${cells.length > 1 ? `
+        <label><span>Cell</span>
+          <select data-cell-select>
+            <option value="">Choose a cell...</option>
+            ${cells.map(cell => `<option value="${escapeHtml(cell)}" ${sameCell(cell, cellChoice) ? "selected" : ""}>${escapeHtml(cell)} (${(members[cell] || []).length})</option>`).join("")}
+          </select>
+        </label>` : `<div><span class="label">Your cell</span><h3>${escapeHtml(cellChoice)}</h3></div>`}
+      <label><span>Meeting date</span><input type="date" data-cell-date value="${cellDate}" max="${localDateKey(new Date())}" /></label>
+    </div>
+  `;
+  if (!cellChoice) return `${picker}<div class="panel"><p class="muted">Choose a cell to take attendance.</p></div>`;
+
+  const roster = members[cellChoice] || [];
+  const existing = cellReportsFor(cellChoice).find(report => report.meetingDate === cellDate);
+  const draftKey = `${cellChoice}|${cellDate}`;
+  if (cellDraft?.key !== draftKey) {
+    cellDraft = existing
+      ? { key: draftKey, held: existing.held, present: new Set(existing.present), topic: existing.topic, notes: existing.notes, offering: existing.offering ? String(existing.offering) : "", visitors: existing.visitors.map(visitor => ({ ...visitor, addToCell: false })) }
+      : { key: draftKey, held: "yes", present: new Set(), topic: "", notes: "", offering: "", visitors: [] };
+  }
+  const draft = cellDraft;
+  const held = draft.held === "yes";
+  const rows = roster.map(member => {
+    const { marks, missed } = memberHistory(cellChoice, member.id);
+    return `
+      <label class="roster-row" data-roster-row="${escapeHtml(`${member.name} ${member.phone}`.toLowerCase())}">
+        <input type="checkbox" name="present" value="${member.id}" ${draft.present.has(member.id) ? "checked" : ""} />
+        <span class="roster-person"><strong>${escapeHtml(member.name || "Unnamed")}</strong><small>${escapeHtml(member.phone || "No phone")}</small></span>
+        ${missed >= 3 ? `<span class="tag">Missed ${missed}</span>` : ""}
+        ${historyDots(marks)}
+      </label>
+    `;
+  }).join("");
+  return `
+    ${picker}
+    ${existing ? `<p class="form-note">A report for this date was already sent${existing.leaderName ? ` by ${escapeHtml(existing.leaderName)}` : ""}. Saving again will update it.</p>` : ""}
+    <form class="form cell-report-form" data-cell-report-form>
+      <fieldset class="held-toggle">
+        <legend>Did the meeting hold?</legend>
+        <label><input type="radio" name="held" value="yes" ${held ? "checked" : ""} data-cell-held /> <span>Yes</span></label>
+        <label><input type="radio" name="held" value="no" ${held ? "" : "checked"} data-cell-held /> <span>No</span></label>
+      </fieldset>
+      <div class="cell-held-section" data-held-section ${held ? "" : "hidden"}>
+        <div class="roster-head">
+          <h3>Attendance</h3>
+          <strong class="present-count" data-present-count>${draft.present.size} of ${roster.length} present</strong>
+        </div>
+        ${roster.length ? `
+          <div class="roster-tools">
+            <input type="search" placeholder="Search names or phone numbers" data-roster-search />
+            <button class="btn outline small" type="button" data-mark-all>Mark all present</button>
+          </div>
+          <div class="roster-list">${rows}</div>
+          <p class="muted roster-key">${historyDots(["P", "A", "-"]).replace(/title="[^"]*"/, "")} Present &middot; Absent &middot; Not yet a member &mdash; last 4 meetings, newest first.</p>
+        ` : `<p class="muted">No one has joined this cell yet. People appear here when they register for it on the Communities page, or when you add visitors below.</p>`}
+        <h3>Visitors</h3>
+        <div class="visitor-list" data-visitor-list>${draft.visitors.map(visitorRow).join("")}</div>
+        <button class="btn outline small" type="button" data-add-visitor>+ Add a visitor</button>
+        <label><span>Topic or study</span><input name="topic" value="${escapeHtml(draft.topic)}" placeholder="What did you study or discuss?" /></label>
+        <label><span>Offering (&#8358;)</span><input name="offering" inputmode="numeric" value="${escapeHtml(draft.offering)}" placeholder="0" /></label>
+      </div>
+      <label><span data-notes-label>${held ? "Notes, testimonies or prayer requests" : "Why didn't the meeting hold?"}</span><textarea name="notes" rows="3">${escapeHtml(draft.notes)}</textarea></label>
+      <button class="btn primary block" type="submit">${existing ? "Update Report" : "Send Report"} ${icon("arrow")}</button>
+      <p class="form-note"></p>
+    </form>
+  `;
+}
+
+function cellReportsTab() {
+  const notice = cellDataNotice();
+  if (notice) return notice;
+  const { cells, members } = cellData;
+  const scope = cellReportFilter && cells.some(cell => sameCell(cell, cellReportFilter)) ? [cellReportFilter] : cells;
+  const reports = cellData.reports.filter(report => scope.some(cell => sameCell(cell, report.cell)));
+  const report = cellReportView && reports.find(item => item.id === cellReportView);
+  if (report) return cellReportDetail(report, members[report.cell] || []);
+  cellReportView = "";
+
+  const month = localDateKey(new Date()).slice(0, 7);
+  const thisMonth = reports.filter(item => item.meetingDate.startsWith(month));
+  const heldThisMonth = thisMonth.filter(item => item.held === "yes" && item.memberCount);
+  const presentSum = heldThisMonth.reduce((sum, item) => sum + item.presentCount, 0);
+  const memberSum = heldThisMonth.reduce((sum, item) => sum + item.memberCount, 0);
+  const average = memberSum ? Math.round((presentSum / memberSum) * 100) : null;
+  const visitors = thisMonth.reduce((sum, item) => sum + item.visitorCount, 0);
+  const needFollowUp = followUps(scope);
+  const rows = reports.map(item => {
+    const rate = item.held === "yes" && item.memberCount ? ` (${Math.round((item.presentCount / item.memberCount) * 100)}%)` : "";
+    return [
+      formatDate(item.meetingDate),
+      escapeHtml(item.cell),
+      escapeHtml(item.leaderName || "-"),
+      item.held === "yes" ? `${item.presentCount} / ${item.memberCount}${rate}` : `<span class="tag">Didn't hold</span>`,
+      String(item.visitorCount || 0),
+      item.offering ? money(item.offering) : "-",
+      `<button class="btn outline small" type="button" data-view-report="${item.id}">View</button>`
+    ];
+  });
+  return `
+    <div class="panel cell-picker">
+      ${cells.length > 1 ? `
+        <label><span>Show</span>
+          <select data-report-filter>
+            <option value="">All cells</option>
+            ${cells.map(cell => `<option value="${escapeHtml(cell)}" ${sameCell(cell, cellReportFilter) ? "selected" : ""}>${escapeHtml(cell)}</option>`).join("")}
+          </select>
+        </label>` : `<div><span class="label">Your cell</span><h3>${escapeHtml(cells[0])}</h3></div>`}
+      <button class="btn outline" type="button" data-cell-csv ${reports.length ? "" : "disabled"}>Download CSV</button>
+    </div>
+    <div class="metric-grid">
+      <article class="metric large"><span>Reports This Month</span><strong>${thisMonth.length}</strong><small>${MONTHS[new Date().getMonth()]}</small></article>
+      <article class="metric large"><span>Average Attendance</span><strong>${average === null ? "-" : `${average}%`}</strong><small>meetings held this month</small></article>
+      <article class="metric large"><span>Visitors</span><strong>${visitors}</strong><small>this month</small></article>
+      <article class="metric large"><span>Need Follow-Up</span><strong>${needFollowUp.length}</strong><small>missed 3+ meetings in a row</small></article>
+    </div>
+    ${needFollowUp.length ? `
+      <div class="panel">
+        <h3>Follow Up</h3>
+        <p class="muted">Members who missed their last 3 or more meetings. A call or visit goes a long way.</p>
+        <div class="follow-up-list">
+          ${needFollowUp.map(member => `
+            <div class="follow-up">
+              <span><strong>${escapeHtml(member.name)}</strong><small>${escapeHtml(member.cell)} &middot; missed ${member.missed}</small></span>
+              ${member.phone ? `<a class="btn outline small" href="tel:${escapeHtml(member.phone.replace(/[^\d+]/g, ""))}">${icon("phone")} ${escapeHtml(member.phone)}</a>` : ""}
+            </div>
+          `).join("")}
+        </div>
+      </div>
+    ` : ""}
+    <div class="table section-table">${table(["Date", "Cell", "Leader", "Attendance", "Visitors", "Offering", ""], rows)}</div>
+  `;
+}
+
+function cellReportDetail(report, roster) {
+  const byId = new Map(roster.map(member => [member.id, member]));
+  const person = id => byId.get(id) || { name: "(no longer in this cell)", phone: "" };
+  const names = ids => ids.length
+    ? `<ul class="profile-list">${ids.map(id => person(id)).map(member => `<li><strong>${escapeHtml(member.name)}</strong>${member.phone ? `<small>${escapeHtml(member.phone)}</small>` : ""}</li>`).join("")}</ul>`
+    : `<p class="muted">None</p>`;
+  return `
+    <button class="btn ghost-dark" type="button" data-report-back>&larr; All reports</button>
+    <div class="panel report-head">
+      <div>
+        <span class="label">${escapeHtml(report.cell)}</span>
+        <h3>${formatDate(report.meetingDate)}</h3>
+        <p class="muted">Sent by ${escapeHtml(report.leaderName || "-")} &middot; ${new Date(report.updatedAt || report.createdAt).toLocaleString()}</p>
+      </div>
+      <div class="inline-actions">
+        <button class="btn primary small" type="button" data-edit-report="${report.id}">Edit</button>
+        ${can("delete_submissions") ? `<button class="btn danger small" type="button" data-delete-report="${report.id}">Delete</button>` : ""}
+      </div>
+    </div>
+    ${report.held === "yes" ? `
+      <div class="metric-grid">
+        <article class="metric large"><span>Present</span><strong>${report.presentCount} / ${report.memberCount}</strong><small>${report.memberCount ? Math.round((report.presentCount / report.memberCount) * 100) : 0}% attendance</small></article>
+        <article class="metric large"><span>Visitors</span><strong>${report.visitorCount}</strong><small>first-timers and guests</small></article>
+        <article class="metric large"><span>Offering</span><strong>${report.offering ? money(report.offering) : "-"}</strong><small>recorded</small></article>
+      </div>
+      <div class="profile-grid">
+        ${profileCard("Present", "check", names(report.present))}
+        ${profileCard("Absent", "users", names(report.absent))}
+        ${profileCard("Visitors", "heart", report.visitors.length ? `<ul class="profile-list">${report.visitors.map(visitor => `<li><strong>${escapeHtml(visitor.name)}</strong>${visitor.phone ? `<small>${escapeHtml(visitor.phone)}</small>` : ""}</li>`).join("")}</ul>` : `<p class="muted">None</p>`)}
+      </div>
+      ${report.topic ? `<div class="panel"><h3>Topic</h3><p>${escapeHtml(report.topic)}</p></div>` : ""}
+    ` : `<div class="panel"><h3>The meeting didn't hold</h3></div>`}
+    ${report.notes ? `<div class="panel"><h3>Notes</h3><p>${escapeHtml(report.notes)}</p></div>` : ""}
+  `;
+}
+
+function downloadCellReportsCsv() {
+  const { cells, members } = cellData;
+  const scope = cellReportFilter ? [cellReportFilter] : cells;
+  const reports = cellData.reports.filter(report => scope.some(cell => sameCell(cell, report.cell)));
+  const nameOf = (cell, id) => (members[cell] || []).find(member => member.id === id)?.name || "(removed)";
+  const cell = value => `"${String(value ?? "").replaceAll('"', '""')}"`;
+  const headers = ["Date", "Cell", "Leader", "Held", "Present", "Members", "Attendance %", "Visitors", "Offering", "Topic", "Notes", "Present names", "Absent names", "Visitor names"];
+  const rows = reports.map(report => [
+    report.meetingDate, report.cell, report.leaderName, report.held, report.presentCount, report.memberCount,
+    report.held === "yes" && report.memberCount ? Math.round((report.presentCount / report.memberCount) * 100) : "",
+    report.visitorCount, report.offering || "", report.topic, report.notes,
+    report.present.map(id => nameOf(report.cell, id)).join("; "),
+    report.absent.map(id => nameOf(report.cell, id)).join("; "),
+    report.visitors.map(visitor => visitor.name).join("; ")
+  ]);
+  const csv = [headers, ...rows].map(row => row.map(cell).join(",")).join("\n");
+  const link = document.createElement("a");
+  link.href = URL.createObjectURL(new Blob([csv], { type: "text/csv;charset=utf-8" }));
+  link.download = `cell-reports${cellReportFilter ? `-${cellReportFilter.toLowerCase().replace(/[^a-z0-9]+/g, "-")}` : ""}.csv`;
+  link.click();
+  setTimeout(() => URL.revokeObjectURL(link.href), 1000);
+}
+
+async function submitCellReport(form) {
+  const note = form.querySelector(".form-note");
+  const button = form.querySelector("button[type='submit']");
+  const data = new FormData(form);
+  const held = data.get("held") === "no" ? "no" : "yes";
+  const visitors = [...form.querySelectorAll("[data-visitor-row]")].map(row => ({
+    name: row.querySelector("[name=visitorName]").value.trim(),
+    phone: row.querySelector("[name=visitorPhone]").value.trim(),
+    addToCell: row.querySelector("[name=visitorJoin]").checked
+  })).filter(visitor => visitor.name);
+  const body = {
+    cell: cellChoice,
+    meetingDate: cellDate,
+    held,
+    present: data.getAll("present"),
+    visitors,
+    topic: data.get("topic") || "",
+    offering: data.get("offering") || "",
+    notes: data.get("notes") || "",
+    submissionId: crypto.randomUUID()
+  };
+  if (held === "no" && !body.notes.trim()) {
+    note.className = "form-note error";
+    note.textContent = "Please say briefly why the meeting didn't hold.";
+    return;
+  }
+  button.disabled = true;
+  note.className = "form-note";
+  note.textContent = "Sending report...";
+  try {
+    const result = await postOrQueue("/api/cell/reports", body, `${cellChoice} report`);
+    if (result.queued) {
+      note.className = "form-note success";
+      note.textContent = QUEUED_NOTE;
+      return;
+    }
+    cellData = result.overview;
+    cellDraft = null;
+    const summary = held === "yes" ? `${body.present.length} present` : "meeting marked as not held";
+    toast(`${result.updated ? "Report updated" : "Report sent"}: ${summary}.${result.added.length ? ` Added ${result.added.join(", ")} to the cell.` : ""}`, "success");
+    render();
+  } catch (error) {
+    note.className = "form-note error";
+    note.textContent = error.message;
+  } finally {
+    button.disabled = false;
+  }
+}
+
 function editableTable(headers, rows, records) {
   const canEdit = can("edit_submissions");
   const canDelete = can("delete_submissions");
@@ -1441,7 +1760,7 @@ function adminsTab() {
     <tr>
       <td>${admin.name}</td>
       <td>${admin.email}</td>
-      <td><span class="badge role-${admin.role}">${admin.role}</span></td>
+      <td><span class="badge role-${admin.role}">${ROLE_LABELS[admin.role] || admin.role}</span></td>
       <td>${admin.permissions?.length ? admin.permissions.map(permissionLabel).join(", ") : "-"}</td>
       <td>${admin.active ? "Active" : "Suspended"}</td>
       <td>${admin.lastLoginAt ? new Date(admin.lastLoginAt).toLocaleString() : "Never"}</td>
@@ -1460,6 +1779,7 @@ function adminsTab() {
 }
 
 function permissionLabel(permission) {
+  if (permission.startsWith("cell:")) return `Cell: ${permission.slice(5)}`;
   return PERMISSION_LABELS[permission] || permission;
 }
 
@@ -1475,10 +1795,16 @@ function adminForm(editing) {
         <label><span>${editing ? "New password (leave blank to keep current)" : "Temporary password"}</span><input name="password" type="password" minlength="8" ${editing ? "" : "required"} /></label>
         <label><span>Role</span>
           <select name="role" data-role-select>
-            ${["viewer", "manager", "superadmin"].map(role => `<option value="${role}" ${(editing?.role || "viewer") === role ? "selected" : ""}>${role}</option>`).join("")}
+            ${["viewer", "manager", "superadmin", "cell_leader"].map(role => `<option value="${role}" ${(editing?.role || "viewer") === role ? "selected" : ""}>${ROLE_LABELS[role]}</option>`).join("")}
           </select>
         </label>
-        <fieldset class="permission-grid">
+        <fieldset class="permission-grid" data-cell-picker ${editing?.role === "cell_leader" ? "" : "hidden"}>
+          <legend>Cells this leader manages</legend>
+          ${communities.map(([name]) => `
+            <label class="permission-check"><input type="checkbox" name="cells" value="${escapeHtml(name)}" ${permissions.includes(`cell:${name}`) ? "checked" : ""} /> <span>${escapeHtml(name)}</span></label>
+          `).join("")}
+        </fieldset>
+        <fieldset class="permission-grid" data-permission-picker ${editing?.role === "cell_leader" ? "hidden" : ""}>
           <legend>Permissions</legend>
           ${ALL_PERMISSIONS.map(permission => `
             <label class="permission-check"><input type="checkbox" name="permissions" value="${permission}" ${permissions.includes(permission) ? "checked" : ""} /> <span>${permissionLabel(permission)}</span></label>
@@ -1763,6 +2089,95 @@ function render() {
   });
   document.querySelector("[data-member-logout]")?.addEventListener("click", signOutMember);
   document.querySelectorAll("[data-install]").forEach(button => button.addEventListener("click", installApp));
+  // Cell reports. Ticking, searching and adding visitors change the page in
+  // place (no re-render) so nothing the leader has typed is lost.
+  document.querySelector("[data-cell-select]")?.addEventListener("change", event => {
+    cellChoice = event.target.value;
+    cellDraft = null;
+    render();
+  });
+  document.querySelector("[data-cell-date]")?.addEventListener("change", event => {
+    if (!event.target.value) return;
+    cellDate = event.target.value;
+    cellDraft = null;
+    render();
+  });
+  const cellForm = document.querySelector("[data-cell-report-form]");
+  if (cellForm) {
+    const updateCount = () => {
+      const boxes = cellForm.querySelectorAll("input[name=present]");
+      const ticked = [...boxes].filter(box => box.checked);
+      cellDraft.present = new Set(ticked.map(box => box.value));
+      const count = cellForm.querySelector("[data-present-count]");
+      if (count) count.textContent = `${ticked.length} of ${boxes.length} present`;
+    };
+    cellForm.addEventListener("change", event => {
+      if (event.target.name === "present") updateCount();
+      if (event.target.matches("[data-cell-held]")) {
+        cellDraft.held = event.target.value;
+        cellForm.querySelector("[data-held-section]").hidden = event.target.value !== "yes";
+        cellForm.querySelector("[data-notes-label]").textContent = event.target.value === "yes" ? "Notes, testimonies or prayer requests" : "Why didn't the meeting hold?";
+      }
+    });
+    cellForm.querySelector("[data-roster-search]")?.addEventListener("input", event => {
+      const query = event.target.value.trim().toLowerCase();
+      cellForm.querySelectorAll("[data-roster-row]").forEach(row => {
+        row.hidden = Boolean(query) && !row.dataset.rosterRow.includes(query);
+      });
+    });
+    cellForm.querySelector("[data-mark-all]")?.addEventListener("click", () => {
+      cellForm.querySelectorAll("[data-roster-row]:not([hidden]) input[name=present]").forEach(box => { box.checked = true; });
+      updateCount();
+    });
+    cellForm.querySelector("[data-add-visitor]").addEventListener("click", () => {
+      const list = cellForm.querySelector("[data-visitor-list]");
+      list.insertAdjacentHTML("beforeend", visitorRow());
+      list.lastElementChild.querySelector("input").focus();
+    });
+    cellForm.addEventListener("click", event => {
+      if (event.target.closest("[data-remove-visitor]")) event.target.closest("[data-visitor-row]").remove();
+    });
+    cellForm.addEventListener("submit", event => {
+      event.preventDefault();
+      submitCellReport(cellForm);
+    });
+  }
+  document.querySelector("[data-report-filter]")?.addEventListener("change", event => {
+    cellReportFilter = event.target.value;
+    render();
+  });
+  document.querySelector("[data-cell-csv]")?.addEventListener("click", downloadCellReportsCsv);
+  document.querySelectorAll("[data-view-report]").forEach(button => button.addEventListener("click", () => {
+    cellReportView = button.dataset.viewReport;
+    render();
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }));
+  document.querySelector("[data-report-back]")?.addEventListener("click", () => {
+    cellReportView = "";
+    render();
+  });
+  document.querySelector("[data-edit-report]")?.addEventListener("click", event => {
+    const report = cellData.reports.find(item => item.id === event.currentTarget.dataset.editReport);
+    cellChoice = report.cell;
+    cellDate = report.meetingDate;
+    cellDraft = null;
+    cellReportView = "";
+    activeDashboard = "cell-attendance";
+    render();
+  });
+  document.querySelector("[data-delete-report]")?.addEventListener("click", async event => {
+    if (!confirm("Delete this cell report? This cannot be undone.")) return;
+    try {
+      const response = await fetch(`/api/admin/submissions/${event.currentTarget.dataset.deleteReport}`, { method: "DELETE" });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(result.error || "Could not delete this report.");
+      cellReportView = "";
+      dashboardData = result.dashboard || null;
+      await loadCellData(true);
+    } catch (error) {
+      alert(error.message);
+    }
+  });
   document.querySelector("[data-member-search]")?.addEventListener("input", event => {
     const query = event.target.value.trim().toLowerCase();
     document.querySelectorAll("[data-member-row]").forEach(row => {
@@ -1799,6 +2214,7 @@ function render() {
       adminSession = result.admin;
       activeDashboard = "overview";
       dashboardData = null;
+      cellData = undefined;
     } catch (error) {
       loginError = error.message;
     } finally {
@@ -1816,6 +2232,11 @@ function render() {
     dashboardData = null;
     adminsList = null;
     broadcastAudience = null;
+    cellData = undefined;
+    cellChoice = "";
+    cellDraft = null;
+    cellReportView = "";
+    cellReportFilter = "";
     activeDashboard = "overview";
     render();
   });
@@ -1914,6 +2335,9 @@ function render() {
     }
   }));
   document.querySelector("[data-role-select]")?.addEventListener("change", event => {
+    const leader = event.target.value === "cell_leader";
+    document.querySelector("[data-cell-picker]").hidden = !leader;
+    document.querySelector("[data-permission-picker]").hidden = leader;
     const defaults = ROLE_DEFAULTS[event.target.value] || [];
     document.querySelectorAll("[data-admin-form] input[name='permissions']").forEach(checkbox => {
       checkbox.checked = defaults.includes(checkbox.value);
@@ -1948,7 +2372,9 @@ function render() {
     const payload = {
       name: formData.get("name"),
       role: formData.get("role"),
-      permissions: formData.getAll("permissions")
+      permissions: formData.get("role") === "cell_leader"
+        ? formData.getAll("cells").map(cell => `cell:${cell}`)
+        : formData.getAll("permissions")
     };
     if (!editingId) {
       payload.email = formData.get("email");
@@ -1980,7 +2406,8 @@ function render() {
   if (activeView === "dashboard") {
     if (adminSession === undefined) loadAdminSession();
     else if (adminSession) {
-      loadDashboard();
+      if (can("view_dashboard")) loadDashboard();
+      if (activeDashboard.startsWith("cell-")) loadCellData();
       if (activeDashboard === "admins") loadAdmins();
       if (activeDashboard === "broadcast") loadBroadcastAudience();
     }

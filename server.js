@@ -4,6 +4,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync, statSync, unlinkSyn
 import { extname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createClient } from "@supabase/supabase-js";
+import { COMMUNITIES } from "./src/communities.js";
 
 const root = resolve(fileURLToPath(new URL(".", import.meta.url)));
 const dataDir = join(root, "data");
@@ -59,12 +60,31 @@ const ALL_PERMISSIONS = [
   "manage_admins",
   "export_data"
 ];
-const ROLES = ["superadmin", "manager", "viewer"];
+const ROLES = ["superadmin", "manager", "viewer", "cell_leader"];
 const ROLE_DEFAULTS = {
   superadmin: ALL_PERMISSIONS.slice(),
   manager: ["view_dashboard", "edit_submissions", "manage_content", "export_data", "send_broadcasts"],
-  viewer: ["view_dashboard"]
+  viewer: ["view_dashboard"],
+  cell_leader: ["cell_reports"]
 };
+// A cell leader's cells are stored in their permissions list as
+// "cell:<name>" entries -- no extra database column needed.
+const CELL_PREFIX = "cell:";
+const COMMUNITY_NAMES = COMMUNITIES.map(([name]) => name);
+
+// Checks and normalises the permissions sent for an admin account. Cell
+// leaders get only cell access, for at least one real cell; other roles get
+// only the standard permissions.
+function cleanPermissions(role, permissions) {
+  const list = Array.isArray(permissions) ? permissions.map(String) : [];
+  if (role !== "cell_leader") return list.filter(permission => ALL_PERMISSIONS.includes(permission));
+  const cells = [...new Set(list
+    .filter(permission => permission.startsWith(CELL_PREFIX))
+    .map(permission => permission.slice(CELL_PREFIX.length))
+    .filter(name => COMMUNITY_NAMES.includes(name)))];
+  if (!cells.length) throw new Error("Choose at least one cell for this cell leader.");
+  return ["cell_reports", ...cells.map(name => CELL_PREFIX + name)];
+}
 const SESSION_TTL_MS = 12 * 60 * 60 * 1000;
 const loginAttempts = new Map();
 
@@ -727,7 +747,79 @@ function sameCelebrant(record, fields) {
     && record.fields.fullName.toLowerCase().replace(/\s+/g, " ") === fields.fullName.toLowerCase().replace(/\s+/g, " ");
 }
 
-// ---- Members -----------------------------------------------------------
+// ---- Cell reports ------------------------------------------------------
+//
+// A cell's members are everyone who joined it through the Communities page
+// (community records whose preferredCommunity is that cell). A cell report
+// is one meeting: who was present or absent, visitors, topic, offering and
+// notes -- one report per cell per date, re-saving the same date edits it.
+//
+// Cell leaders only ever reach their own cells' members and reports through
+// these routes; they have no view_dashboard permission, so every other admin
+// route (all submissions, exports, broadcasts...) refuses them.
+
+function sameCellName(a, b) {
+  return String(a || "").trim().toLowerCase() === String(b || "").trim().toLowerCase();
+}
+
+function cellsForAdmin(admin, db) {
+  if (hasPermission(admin, "view_dashboard")) {
+    const inUse = db.submissions.filter(record => record.type === "community").map(record => record.fields.preferredCommunity).filter(Boolean);
+    return [...new Set([...COMMUNITY_NAMES, ...inUse])];
+  }
+  if (admin.role !== "cell_leader") return [];
+  return (admin.permissions || []).filter(permission => permission.startsWith(CELL_PREFIX)).map(permission => permission.slice(CELL_PREFIX.length));
+}
+
+function requireCellAccess(req, res, db) {
+  const ctx = requireAdminSession(req, res, db, null);
+  if (!ctx) return null;
+  const cells = cellsForAdmin(ctx.admin, db);
+  if (!cells.length) {
+    send(res, 403, { error: "Your account does not have access to any cells." });
+    return null;
+  }
+  return { ...ctx, cells, seesAll: hasPermission(ctx.admin, "view_dashboard") };
+}
+
+// One entry per person: someone who signed up twice keeps their latest record.
+function cellMembers(db, cell) {
+  const byPerson = new Map();
+  db.submissions
+    .filter(record => record.type === "community" && sameCellName(record.fields.preferredCommunity, cell))
+    .sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt))
+    .forEach(record => {
+      const phone = String(phoneNumber(record.fields)).replace(/\D/g, "");
+      const key = phone.length >= 10 ? phone.slice(-10) : record.id;
+      byPerson.set(key, {
+        id: record.id,
+        name: displayName(record.fields),
+        phone: phoneNumber(record.fields),
+        email: emailAddress(record.fields),
+        joinedAt: record.createdAt
+      });
+    });
+  return [...byPerson.values()].sort((a, b) => a.name.localeCompare(b.name));
+}
+
+function cellOverview(db, ctx) {
+  const reports = db.submissions
+    .filter(record => record.type === "cell_report" && ctx.cells.some(cell => sameCellName(cell, record.fields.cell)))
+    .sort((a, b) => String(b.fields.meetingDate).localeCompare(String(a.fields.meetingDate)) || new Date(b.createdAt) - new Date(a.createdAt))
+    .map(record => ({ id: record.id, createdAt: record.createdAt, updatedAt: record.updatedAt, ...record.fields }));
+  return {
+    cells: ctx.cells,
+    seesAll: ctx.seesAll,
+    members: Object.fromEntries(ctx.cells.map(cell => [cell, cellMembers(db, cell)])),
+    reports
+  };
+}
+
+function idList(value, allowed) {
+  return Array.isArray(value) ? [...new Set(value.map(String).filter(id => allowed.has(id)))] : [];
+}
+
+
 //
 // Members sign in with a 6-digit code emailed to them; there is no separate
 // sign-up -- anyone who has given an email address on a form can sign in.
@@ -1356,6 +1448,103 @@ async function handleApi(req, res, url) {
     return true;
   }
 
+  if (url.pathname === "/api/cell/overview" && req.method === "GET") {
+    const db = await readDb();
+    const ctx = requireCellAccess(req, res, db);
+    if (!ctx) return true;
+    send(res, 200, cellOverview(db, ctx));
+    return true;
+  }
+
+  if (url.pathname === "/api/cell/reports" && req.method === "POST") {
+    const db = await readDb();
+    const ctx = requireCellAccess(req, res, db);
+    if (!ctx) return true;
+    try {
+      const body = await parseBody(req);
+      const cell = ctx.cells.find(name => sameCellName(name, cleanText(body.cell)));
+      if (!cell) {
+        send(res, 403, { error: "You can only send reports for your own cells." });
+        return true;
+      }
+      const meetingDate = cleanText(body.meetingDate);
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(meetingDate) || Number.isNaN(Date.parse(`${meetingDate}T00:00:00Z`))) throw new Error("Please choose the meeting date.");
+      if (meetingDate > lagosDateKey()) throw new Error("The meeting date can't be in the future.");
+      const held = body.held === "no" ? "no" : "yes";
+      const members = cellMembers(db, cell);
+      const memberIds = new Set(members.map(member => member.id));
+      const present = held === "yes" ? idList(body.present, memberIds) : [];
+      const absent = held === "yes" ? members.map(member => member.id).filter(id => !present.includes(id)) : [];
+      const visitors = held === "yes" && Array.isArray(body.visitors)
+        ? body.visitors.slice(0, 50)
+          .map(visitor => ({ name: cleanText(visitor?.name).slice(0, 120), phone: cleanText(visitor?.phone).slice(0, 30), addToCell: visitor?.addToCell !== false }))
+          .filter(visitor => visitor.name)
+        : [];
+      const offering = Math.max(0, Math.round(Number(String(body.offering || "0").replace(/[^\d.]/g, "")) || 0));
+      const leader = ctx.admin;
+
+      // Visitors who want to join become cell members straight away (unless
+      // already in this cell), so they're on the list at the next meeting.
+      const added = [];
+      for (const visitor of visitors.filter(item => item.addToCell)) {
+        const phoneKey = visitor.phone.replace(/\D/g, "").slice(-10);
+        const alreadyMember = db.submissions.some(record => record.type === "community"
+          && sameCellName(record.fields.preferredCommunity, cell)
+          && ((phoneKey.length === 10 && String(phoneNumber(record.fields)).replace(/\D/g, "").slice(-10) === phoneKey)
+            || displayName(record.fields).toLowerCase() === visitor.name.toLowerCase()));
+        if (alreadyMember) continue;
+        const record = {
+          id: randomUUID(),
+          type: "community",
+          fields: { fullName: visitor.name, name: visitor.name, phoneNumber: visitor.phone, preferredCommunity: cell, addedBy: `${leader.name} (cell report ${meetingDate})` },
+          shortCode: createShortCode(db),
+          status: "Added by cell leader",
+          createdAt: new Date().toISOString()
+        };
+        db.submissions.push(record);
+        added.push(visitor.name);
+      }
+
+      const fields = {
+        cell,
+        meetingDate,
+        held,
+        topic: cleanText(body.topic).slice(0, 200),
+        notes: cleanText(body.notes),
+        offering,
+        present,
+        absent,
+        visitors: visitors.map(({ name, phone }) => ({ name, phone })),
+        memberCount: members.length,
+        presentCount: present.length,
+        visitorCount: visitors.length,
+        leaderId: leader.id,
+        leaderName: leader.name
+      };
+      // One report per cell per date: re-sending the same date edits it.
+      const existing = db.submissions.find(record => record.type === "cell_report" && sameCellName(record.fields.cell, cell) && record.fields.meetingDate === meetingDate);
+      if (existing) {
+        existing.fields = fields;
+        existing.updatedAt = new Date().toISOString();
+      } else {
+        db.submissions.push({
+          id: /^[0-9a-f-]{36}$/i.test(String(body.submissionId)) && !db.submissions.some(record => record.id === body.submissionId) ? body.submissionId : randomUUID(),
+          type: "cell_report",
+          fields,
+          shortCode: createShortCode(db),
+          status: "Submitted",
+          createdAt: new Date().toISOString()
+        });
+      }
+      addAuditLog(db, leader, existing ? "Updated cell report" : "Submitted cell report", `${cell} - ${meetingDate}${added.length ? ` (added ${added.length} visitor${added.length === 1 ? "" : "s"} to the cell)` : ""}`);
+      await writeDb(db);
+      send(res, existing ? 200 : 201, { updated: Boolean(existing), added, overview: cellOverview(db, ctx) });
+    } catch (error) {
+      send(res, 400, { error: error.message });
+    }
+    return true;
+  }
+
   if (url.pathname === "/api/admin/login" && req.method === "POST") {
     try {
       const body = await parseBody(req);
@@ -1537,8 +1726,8 @@ async function handleApi(req, res, url) {
       if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)) throw new Error("Please enter a valid email address.");
       if (password.length < 8) throw new Error("Password must be at least 8 characters.");
       if (db.admins.some(item => item.email === email)) throw new Error("An admin with that email already exists.");
-      const permissions = Array.isArray(body.permissions)
-        ? body.permissions.filter(permission => ALL_PERMISSIONS.includes(permission))
+      const permissions = Array.isArray(body.permissions) || role === "cell_leader"
+        ? cleanPermissions(role, body.permissions)
         : ROLE_DEFAULTS[role].slice();
       if (ctx.admin.role !== "superadmin" && (role === "superadmin" || permissions.includes("manage_admins"))) {
         throw new Error("Only a superadmin can grant superadmin access or the manage-admins permission.");
@@ -1597,13 +1786,13 @@ async function handleApi(req, res, url) {
         const otherActiveSuperadmins = db.admins.filter(item => item.id !== target.id && item.role === "superadmin" && item.active);
         if (!otherActiveSuperadmins.length) throw new Error("At least one active superadmin must remain.");
       }
+      const nextRole = body.role !== undefined && ROLES.includes(body.role) ? body.role : target.role;
+      const nextPermissions = Array.isArray(body.permissions) || (nextRole === "cell_leader" && nextRole !== target.role)
+        ? cleanPermissions(nextRole, body.permissions)
+        : body.role !== undefined ? ROLE_DEFAULTS[nextRole].slice() : target.permissions;
       if (body.name !== undefined) target.name = cleanText(body.name);
-      if (body.role !== undefined && ROLES.includes(body.role)) target.role = body.role;
-      if (Array.isArray(body.permissions)) {
-        target.permissions = body.permissions.filter(permission => ALL_PERMISSIONS.includes(permission));
-      } else if (body.role !== undefined) {
-        target.permissions = ROLE_DEFAULTS[target.role].slice();
-      }
+      target.role = nextRole;
+      target.permissions = nextPermissions;
       if (body.active !== undefined) target.active = Boolean(body.active);
       if (body.newPassword) {
         if (String(body.newPassword).length < 8) throw new Error("Password must be at least 8 characters.");
@@ -1622,7 +1811,7 @@ async function handleApi(req, res, url) {
 
   if (url.pathname === "/api/admin/audit-log" && req.method === "GET") {
     const db = await readDb();
-    const ctx = requireAdminSession(req, res, db, null);
+    const ctx = requireAdminSession(req, res, db, "view_dashboard");
     if (!ctx) return true;
     send(res, 200, { entries: db.auditLog.slice(0, 100) });
     return true;
