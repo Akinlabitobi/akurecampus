@@ -782,7 +782,7 @@ function validateBirthday(body) {
   };
   if (!fields.fullName) throw new Error("Please enter the celebrant's full name.");
   if (fields.phoneNumber.replace(/\D/g, "").length < 7) throw new Error("Please enter a valid phone number.");
-  if (fields.emailAddress && !EMAIL_PATTERN.test(fields.emailAddress)) throw new Error("Please enter a valid email address.");
+  if (!EMAIL_PATTERN.test(fields.emailAddress)) throw new Error("Please enter a valid email address.");
   const date = new Date(`${fields.dateOfBirth}T00:00:00Z`);
   if (!/^\d{4}-\d{2}-\d{2}$/.test(fields.dateOfBirth) || Number.isNaN(date.getTime()) || date.toISOString().slice(0, 10) !== fields.dateOfBirth) {
     throw new Error("Please enter a valid date of birth.");
@@ -1158,15 +1158,26 @@ async function sendTermiiBulkEmail(recipients, subject, message) {
   return { delivered };
 }
 
+// Every field on every public form is required. Mirrors the forms in
+// src/app.js; the browser checks first, this stops anyone skipping it.
+const REQUIRED_FIELDS = {
+  community: ["fullName", "phoneNumber", "emailAddress", "preferredCommunity", "areaInAkure", "dateOfBirth", "wouldYouLikeToLead"],
+  workforce: ["fullName", "phoneNumber", "emailAddress", "department", "relevantExperience", "wouldYouLikeToLead"],
+  counselling: ["fullName", "emailAddress", "phoneNumber", "careArea", "preferredTime"],
+  nlp: ["fullName", "phoneNumber", "emailAddress", "prayerFocus"],
+  giving: ["fullName", "phoneNumber", "emailAddress", "fund", "amount"],
+  partnership: ["fullName", "phoneNumber", "emailAddress", "partnershipType", "message"],
+  contact: ["fullName", "emailAddress", "subject", "message"],
+  content: ["fullName", "emailAddress", "subject", "message"],
+  newsletter: ["emailAddress"]
+};
+
 function validateSubmission(type, fields) {
-  if (!["community", "counselling"].includes(type)) return;
-  const required = type === "community"
-    ? ["fullName", "phoneNumber", "preferredCommunity", "areaInAkure", "dateOfBirth"]
-    : ["fullName", "phoneNumber", "careArea", "preferredTime"];
-  const missing = required.find(key => !fields[key]);
+  const missing = (REQUIRED_FIELDS[type] || []).find(key => !String(fields[key] || "").trim());
   if (missing) throw new Error(`Please complete the ${missing.replace(/([A-Z])/g, " $1").toLowerCase()} field.`);
-  if (type === "community" && !/^\d{4}-\d{2}-\d{2}$/.test(fields.dateOfBirth)) throw new Error("Please enter a valid date of birth.");
+  if (fields.dateOfBirth && !/^\d{4}-\d{2}-\d{2}$/.test(fields.dateOfBirth)) throw new Error("Please enter a valid date of birth.");
   if (fields.emailAddress && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(fields.emailAddress)) throw new Error("Please enter a valid email address.");
+  if (fields.phoneNumber && fields.phoneNumber.replace(/\D/g, "").length < 7) throw new Error("Please enter a valid phone number.");
 }
 
 async function syncToGoogleSheet(record) {
@@ -1941,8 +1952,9 @@ async function handleApi(req, res, url) {
       }
       const name = cleanText(body.name || body.fullName);
       const phone = cleanText(body.phone || body.phoneNumber);
-      if (!name && !phone) {
-        send(res, 400, { error: "Please enter at least a name or phone number." });
+      const missing = [["name", name], ["phone number", phone], ["department or group", cleanText(body.department)], ["service", cleanText(body.service)], ["note", cleanText(body.note)]].find(([, value]) => !value);
+      if (missing) {
+        send(res, 400, { error: `Please complete the ${missing[0]} field.` });
         return true;
       }
       const fields = {

@@ -740,12 +740,12 @@ function attendancePage() {
         </div>
         <form class="form attendance-form" data-attendance-form>
           <h3>Daily Attendance</h3>
-          <label><span>Today's code</span><input name="attendanceCode" placeholder="Example: HA0123" autocomplete="off" /></label>
-          <label><span>Full name</span><input name="name" placeholder="Attendee name" /></label>
-          <label><span>Phone number</span><input name="phone" placeholder="Phone number" /></label>
-          <label><span>Department or group</span><input name="department" placeholder="Optional" /></label>
-          <label><span>Service</span><input name="service" value="Sunday Service" /></label>
-          <label><span>Note</span><input name="note" data-tall placeholder="Optional note" /></label>
+          <label><span>Today's code</span><input name="attendanceCode" placeholder="Example: HA0123" autocomplete="off" required /></label>
+          <label><span>Full name</span><input name="name" placeholder="Attendee name" required /></label>
+          <label><span>Phone number</span><input name="phone" type="tel" placeholder="Phone number" required /></label>
+          <label><span>Department or group</span><input name="department" placeholder="Your department or group" required /></label>
+          <label><span>Service</span><input name="service" value="Sunday Service" required /></label>
+          <label><span>Note</span><input name="note" data-tall placeholder="Note" required /></label>
           <button class="btn primary block" type="submit">Save Attendance ${icon("arrow")}</button>
           <p class="form-note">Use the daily code shown on this page or in the dashboard.</p>
         </form>
@@ -773,7 +773,7 @@ function birthdayPage() {
           <h3>Birthday Details</h3>
           <label><span>Full name</span><input name="fullName" placeholder="Full name" autocomplete="name" required /></label>
           <label><span>Phone number</span><input name="phoneNumber" type="tel" placeholder="Phone number" autocomplete="tel" required /></label>
-          <label><span>Email address (optional)</span><input name="emailAddress" type="email" placeholder="So it shows on your My Profile page" autocomplete="email" value="${escapeHtml(memberProfile?.email || "")}" /></label>
+          <label><span>Email address</span><input name="emailAddress" type="email" placeholder="Email address" autocomplete="email" required value="${escapeHtml(memberProfile?.email || "")}" /></label>
           <label><span>Date of birth</span><input name="dateOfBirth" type="date" min="1900-01-01" max="${localDateKey(new Date())}" required /></label>
           ${photoPicker("birthday", "Your photo")}
           <label class="consent"><input name="photoConsent" type="checkbox" /> <span>I'm happy for Harvesters Akure to share this photo and my name when celebrating my birthday.</span></label>
@@ -1002,12 +1002,14 @@ function formField(field, type) {
   const dateOfBirth = field === "Date of Birth";
   const email = field === "Email address";
   const leadershipInterest = field === "Would you like to lead?";
-  const required = dateOfBirth || (["community", "counselling"].includes(type) && ["Full name", "Phone number", "Preferred community", "Area in Akure", "Care area", "Preferred time"].includes(field));
+  const phone = field === "Phone number";
+  const amount = field === "Amount";
   const tall = field === "Message" || field === "Relevant experience";
+  // Every field on every public form is required (the server checks too).
   if (leadershipInterest) {
-    return `<label><span>${field}</span><select name="${name}"><option value="">Select an option</option><option value="Yes">Yes</option><option value="No">No</option></select></label>`;
+    return `<label><span>${field}</span><select name="${name}" required><option value="">Select an option</option><option value="Yes">Yes</option><option value="No">No</option></select></label>`;
   }
-  return `<label><span>${field}</span><input name="${name}" type="${dateOfBirth ? "date" : email ? "email" : "text"}" ${tall ? "data-tall" : ""} ${required ? "required" : ""} placeholder="${dateOfBirth ? "" : field}" /></label>`;
+  return `<label><span>${field}</span><input name="${name}" type="${dateOfBirth ? "date" : email ? "email" : phone ? "tel" : "text"}" ${amount ? 'inputmode="numeric"' : ""} ${tall ? "data-tall" : ""} required placeholder="${dateOfBirth ? "" : field}" /></label>`;
 }
 
 function lockedField(field, value) {
@@ -1932,7 +1934,7 @@ function footer() {
     <footer>
       <div class="newsletter">
         <div><h3>Stay Updated</h3><p>Get launch updates, prayer alerts, and community news from Harvesters Akure.</p></div>
-        <form data-api-form data-form-type="newsletter"><input name="emailAddress" type="email" placeholder="Enter your email" /><button class="btn primary">Stay Connected ${icon("arrow")}</button></form>
+        <form data-api-form data-form-type="newsletter"><input name="emailAddress" type="email" placeholder="Enter your email" required /><button class="btn primary">Stay Connected ${icon("arrow")}</button></form>
       </div>
       <div class="footer-main">
         <div><img src="/logo-white.png" alt="Harvesters Akure" /><p>A campus of Harvesters International Christian Centre, coming to Akure.</p></div>
@@ -2601,7 +2603,7 @@ async function saveBirthday(form) {
   if (!fields.fullName.trim()) return showError("Please enter your full name.");
   if (fields.phoneNumber.replace(/\D/g, "").length < 7) return showError("Please enter a valid phone number.");
   if (!fields.dateOfBirth) return showError("Please enter your date of birth.");
-  if (fields.emailAddress && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(fields.emailAddress)) return showError("Please enter a valid email address.");
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(fields.emailAddress || "")) return showError("Please enter a valid email address.");
   if (photoBusy.birthday) return showError("Your photo is still being prepared. Please wait a moment.");
   if (!photoDrafts.birthday) return showError("Please add a photo of yourself.");
   if (!fields.photoConsent) return showError("Please tick the box to confirm we may share your photo on your birthday.");
