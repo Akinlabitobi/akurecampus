@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta name="theme-color" content="#071e3d" />
+    <title>You're offline | Harvesters Akure</title>
+    <link rel="icon" href="/icons/favicon.svg" type="image/svg+xml" />
+    <style>
+      body { margin: 0; min-height: 100vh; display: grid; place-items: center; padding: 24px; box-sizing: border-box; background: #071e3d; color: #fff; font-family: system-ui, -apple-system, "Segoe UI", sans-serif; text-align: center; }
+      main { max-width: 420px; display: grid; justify-items: center; gap: 16px; }
+      img { width: 220px; }
+      h1 { margin: 12px 0 0; font-size: 1.8rem; }
+      p { margin: 0; color: rgba(255, 255, 255, 0.78); line-height: 1.6; }
+      button { margin-top: 8px; min-height: 48px; padding: 0 28px; border: 0; border-radius: 8px; background: #d71920; color: #fff; font: inherit; font-weight: 700; cursor: pointer; }
+    </style>
+  </head>
+  <body>
+    <main>
+      <img src="/logo-white.png" alt="Harvesters Akure" />
+      <h1>You're offline</h1>
+      <p>This page hasn't been saved on your device yet. Check your connection and try again. Anything you've already filled in and saved will be sent automatically once you're back online.</p>
+      <button type="button" onclick="location.reload()">Try Again</button>
+    </main>
+    <script>window.addEventListener("online", () => location.reload());</script>
+  </body>
+</html>

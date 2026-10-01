@@ -95,6 +95,8 @@ const mimeTypes = {
   ".jpg": "image/jpeg",
   ".jpeg": "image/jpeg",
   ".svg": "image/svg+xml",
+  ".webmanifest": "application/manifest+json",
+  ".ico": "image/x-icon",
   ".json": "application/json; charset=utf-8"
 };
 
@@ -1114,7 +1116,7 @@ async function handleApi(req, res, url) {
       const existing = submissionId && db.submissions.find(record => record.id === submissionId);
       if (existing) {
         const googleSheet = await trySyncToGoogleSheet(existing);
-        send(res, 200, { record: existing, dashboard: dashboard(db), googleSheet });
+        send(res, 200, { record: existing, googleSheet });
         return true;
       }
       const record = {
@@ -1128,7 +1130,7 @@ async function handleApi(req, res, url) {
       db.submissions.push(record);
       await writeDb(db);
       const googleSheet = await trySyncToGoogleSheet(record);
-      send(res, 201, { record, dashboard: dashboard(db), googleSheet });
+      send(res, 201, { record, googleSheet });
     } catch (error) {
       send(res, 400, { error: error.message });
     }
@@ -1703,6 +1705,14 @@ async function handleApi(req, res, url) {
         return true;
       }
       const db = await readDb();
+      // A check-in saved offline and resent (or retried after a dropped
+      // response) carries the same submissionId: return the original.
+      const submissionId = cleanText(body.submissionId || "");
+      const existing = submissionId && db.submissions.find(record => record.id === submissionId);
+      if (existing) {
+        send(res, 200, { record: existing });
+        return true;
+      }
       const name = cleanText(body.name || body.fullName);
       const phone = cleanText(body.phone || body.phoneNumber);
       if (!name && !phone) {
@@ -1719,7 +1729,7 @@ async function handleApi(req, res, url) {
         note: cleanText(body.note || "")
       };
       const record = {
-        id: randomUUID(),
+        id: /^[0-9a-f-]{36}$/i.test(submissionId) ? submissionId : randomUUID(),
         type: "attendance",
         fields,
         status: "Checked in",
@@ -1727,7 +1737,7 @@ async function handleApi(req, res, url) {
       };
       db.submissions.push(record);
       await writeDb(db);
-      send(res, 201, { record, dashboard: dashboard(db) });
+      send(res, 201, { record });
     } catch (error) {
       send(res, 400, { error: error.message });
     }

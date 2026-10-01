@@ -1,6 +1,9 @@
 import * as THREE from "three";
 import { externalLinks, contactInfo, socialLinks } from "./config.js";
 import { SHARE_PAGES } from "./share-meta.js";
+import { postOrQueue, flushOutbox } from "./offline-queue.js";
+
+const QUEUED_NOTE = "You're offline, so this has been saved on your device. It will be sent automatically when you're back online.";
 
 const navItems = [
   ["home", "Home"],
@@ -182,7 +185,8 @@ function icon(name) {
     calendar: '<path d="M8 2v4"></path><path d="M16 2v4"></path><rect width="18" height="18" x="3" y="4" rx="2"></rect><path d="M3 10h18"></path>',
     camera: '<path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3z"></path><circle cx="12" cy="13" r="3"></circle>',
     cake: '<path d="M20 21v-8a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8"></path><path d="M4 16s.5-1 2-1 2.5 2 4 2 2.5-2 4-2 2.5 2 4 2 2-1 2-1"></path><path d="M2 21h20"></path><path d="M7 8v3"></path><path d="M12 8v3"></path><path d="M17 8v3"></path><path d="M7 4h.01"></path><path d="M12 4h.01"></path><path d="M17 4h.01"></path>',
-    check: '<path d="M20 6 9 17l-5-5"></path>'
+    check: '<path d="M20 6 9 17l-5-5"></path>',
+    download: '<path d="M12 15V3"></path><path d="m7 10 5 5 5-5"></path><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>'
   };
   return `<svg class="icon" viewBox="0 0 24 24" aria-hidden="true">${paths[name] || paths.arrow}</svg>`;
 }
@@ -347,6 +351,7 @@ function shell(content) {
       </a>
       <div class="navlinks ${menuOpen ? "open" : ""}">
         ${navItems.map(([id, label]) => `<button class="${activeView === id ? "active" : ""}" data-nav="${id}">${label}</button>`).join("")}
+        <button class="install-link" type="button" data-install ${canInstall() ? "" : "hidden"}>${icon("download")} Install App</button>
       </div>
       <div class="actions">
         <button class="btn primary" data-nav="communities">Join Community</button>
@@ -1506,7 +1511,7 @@ function footer() {
       <div class="footer-main">
         <div><img src="/logo-white.png" alt="Harvesters Akure" /><p>A campus of Harvesters International Christian Centre, coming to Akure.</p></div>
         <div><h4>The Church</h4><button data-nav="about">About Harvesters Akure</button><button data-nav="nlp">Next Level Prayers</button><button data-nav="gallery">Gallery</button></div>
-        <div><h4>Get Involved</h4><button data-nav="communities">Join a Community</button><button data-nav="workforce">Join the Workforce</button><button data-nav="partnership">Partner With Us</button><button data-nav="birthdays">Birthday Celebrations</button><button data-nav="profile">My Profile</button></div>
+        <div><h4>Get Involved</h4><button data-nav="communities">Join a Community</button><button data-nav="workforce">Join the Workforce</button><button data-nav="partnership">Partner With Us</button><button data-nav="birthdays">Birthday Celebrations</button><button data-nav="profile">My Profile</button><button type="button" data-install ${canInstall() ? "" : "hidden"}>Install the App</button></div>
         <div><h4>Contact</h4><p>Akure, Ondo State</p><a href="${contactInfo.phoneHref}">${contactInfo.phone}</a><p>akure@harvestersng.org</p><div class="footer-social">${socialLinks.map(social => `<a href="${social.url}" target="_blank" rel="noopener noreferrer" aria-label="${social.name} ${social.handle}" title="${social.name} ${social.handle}">${icon(social.name.toLowerCase())}</a>`).join("")}</div><button data-nav="dashboard">Team Dashboard</button><a href="/callcentre/">Outreach Call Centre</a></div>
       </div>
       <div class="copyright">© 2026 Harvesters Akure. A campus of Harvesters International Christian Centre.</div>
@@ -1704,18 +1709,14 @@ function render() {
     form.appendChild(note);
     if (button) button.disabled = true;
     try {
-      const response = await fetch("/api/submissions", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ type: form.dataset.formType, fields, submissionId })
-      });
-      const result = await response.json();
-      if (!response.ok) throw new Error(result.error || "Could not save submission");
-      dashboardData = result.dashboard;
+      const result = await postOrQueue("/api/submissions", { type: form.dataset.formType, fields, submissionId }, form.querySelector("h3")?.textContent || "Form");
+      dashboardData = null;
       form.reset();
       delete form.dataset.submissionId;
       note.className = "form-note success";
-      note.textContent = result.googleSheet?.synced
+      note.textContent = result.queued
+        ? QUEUED_NOTE
+        : result.googleSheet?.synced
         ? `Saved and sent to the team. Short code: ${result.record.shortCode || recordCode(result.record)}.`
         : `Saved. Short code: ${result.record.shortCode || recordCode(result.record)}.`;
     } catch (error) {
@@ -1761,6 +1762,7 @@ function render() {
     saveMemberProfile(event.target);
   });
   document.querySelector("[data-member-logout]")?.addEventListener("click", signOutMember);
+  document.querySelectorAll("[data-install]").forEach(button => button.addEventListener("click", installApp));
   document.querySelector("[data-member-search]")?.addEventListener("input", event => {
     const query = event.target.value.trim().toLowerCase();
     document.querySelectorAll("[data-member-row]").forEach(row => {
@@ -2077,13 +2079,7 @@ async function saveBirthday(form) {
   note.textContent = "Sending...";
   button.disabled = true;
   try {
-    const response = await fetch("/api/birthdays", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ...fields, photo: photoDrafts.birthday, submissionId })
-    });
-    const result = await response.json().catch(() => ({}));
-    if (!response.ok) throw new Error(result.error || "Could not save your birthday. Please try again.");
+    const result = await postOrQueue("/api/birthdays", { ...fields, photo: photoDrafts.birthday, submissionId }, "Birthday details");
     const firstName = fields.fullName.trim().split(/\s+/)[0];
     form.reset();
     delete form.dataset.submissionId;
@@ -2092,7 +2088,9 @@ async function saveBirthday(form) {
     dashboardData = null;
     if (memberProfile) loadMemberProfile();
     note.className = "form-note success";
-    note.textContent = result.updated
+    note.textContent = result.queued
+      ? QUEUED_NOTE
+      : result.updated
       ? `Thanks, ${firstName}! Your birthday details have been updated.`
       : `Thank you, ${firstName}! We look forward to celebrating you on ${birthdayLabel(fields.dateOfBirth)}.`;
   } catch (error) {
@@ -2231,18 +2229,12 @@ async function saveAttendance(form) {
   note.textContent = "Saving attendance...";
   if (button) button.disabled = true;
   try {
-    const response = await fetch("/api/attendance", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(fields)
-    });
-    const result = await response.json();
-    if (!response.ok) throw new Error(result.error || "Could not save attendance");
-    dashboardData = result.dashboard;
+    const result = await postOrQueue("/api/attendance", { ...fields, submissionId: crypto.randomUUID() }, "Attendance check-in");
+    dashboardData = null;
     form.reset();
     if (dailyAttendance?.code) form.attendanceCode.value = dailyAttendance.code;
     note.className = "form-note success";
-    note.textContent = "Attendance saved to the dashboard.";
+    note.textContent = result.queued ? `${QUEUED_NOTE} Today's code only works today, so reconnect before the day ends.` : "Attendance saved to the dashboard.";
   } catch (error) {
     note.className = "form-note error";
     note.textContent = error.message;
@@ -2251,4 +2243,109 @@ async function saveAttendance(form) {
   }
 }
 
+// ---- Installable app ---------------------------------------------------
+
+function toast(message, type = "") {
+  const element = document.createElement("div");
+  element.className = `toast ${type}`;
+  element.setAttribute("role", "status");
+  element.textContent = message;
+  document.body.appendChild(element);
+  setTimeout(() => element.classList.add("hide"), 6000);
+  setTimeout(() => element.remove(), 6600);
+}
+
+async function sendSavedForms() {
+  const { sent, failed } = await flushOutbox().catch(() => ({ sent: [], failed: [] }));
+  if (sent.length) {
+    toast(sent.length === 1 ? `Back online: your ${sent[0].label.toLowerCase()} has been sent.` : `Back online: ${sent.length} saved forms have been sent.`, "success");
+  }
+  failed.forEach(item => toast(`Your saved ${item.label.toLowerCase()} couldn't be sent: ${item.error}`, "error"));
+}
+
+const isStandalone = () => window.matchMedia("(display-mode: standalone)").matches || window.navigator.standalone === true;
+// iPhones and iPads (including iPads that report themselves as a Mac).
+const isAppleMobile = () => /iphone|ipad|ipod/i.test(navigator.userAgent) || (navigator.platform === "MacIntel" && navigator.maxTouchPoints > 1);
+// Chrome, Edge and Android hand us an install prompt to trigger later.
+let deferredInstall = null;
+
+function canInstall() {
+  return !isStandalone() && Boolean(deferredInstall || isAppleMobile());
+}
+
+// The install buttons are always rendered (hidden) so this can show or hide
+// them without a full re-render, which would wipe anything being typed.
+function updateInstallButtons() {
+  document.querySelectorAll("[data-install]").forEach(button => {
+    button.hidden = !canInstall();
+  });
+}
+
+function showAppleInstallSteps() {
+  const modal = document.createElement("div");
+  modal.className = "form-modal";
+  modal.innerHTML = `
+    <div class="form-modal-panel install-steps" role="dialog" aria-modal="true" aria-label="Install the app">
+      <button class="form-modal-close" type="button" aria-label="Close">&times;</button>
+      <img src="/icons/icon-192.png" alt="" />
+      <h3>Install Harvesters Akure</h3>
+      <ol>
+        <li>Tap the <strong>Share</strong> button <span aria-hidden="true">(the square with an arrow)</span> at the bottom of Safari.</li>
+        <li>Scroll down and tap <strong>Add to Home Screen</strong>.</li>
+        <li>Tap <strong>Add</strong>. The app appears on your home screen.</li>
+      </ol>
+      <p class="muted">Using Chrome on iPhone? Open this site in Safari first.</p>
+      <button class="btn primary block" type="button">Got it</button>
+    </div>
+  `;
+  const close = () => {
+    modal.remove();
+    document.body.classList.remove("modal-open");
+  };
+  modal.addEventListener("click", event => {
+    if (event.target === modal || event.target.closest("button")) close();
+  });
+  document.body.appendChild(modal);
+  document.body.classList.add("modal-open");
+}
+
+async function installApp() {
+  if (menuOpen) {
+    menuOpen = false;
+    document.querySelector(".navlinks")?.classList.remove("open");
+  }
+  if (deferredInstall) {
+    deferredInstall.prompt();
+    await deferredInstall.userChoice.catch(() => null);
+    deferredInstall = null;
+    updateInstallButtons();
+  } else if (isAppleMobile()) {
+    showAppleInstallSteps();
+  }
+}
+
+window.addEventListener("beforeinstallprompt", event => {
+  event.preventDefault();
+  deferredInstall = event;
+  updateInstallButtons();
+});
+
+window.addEventListener("appinstalled", () => {
+  deferredInstall = null;
+  updateInstallButtons();
+  toast("Harvesters Akure is installed. You'll find it on your home screen.", "success");
+});
+
+window.addEventListener("online", sendSavedForms);
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible") sendSavedForms();
+});
+
+// Only production builds: in `npm run dev` a service worker would serve
+// stale files and hide changes while editing.
+if ("serviceWorker" in navigator && import.meta.env.PROD) {
+  window.addEventListener("load", () => navigator.serviceWorker.register("/sw.js").catch(() => {}));
+}
+
 render();
+sendSavedForms();
