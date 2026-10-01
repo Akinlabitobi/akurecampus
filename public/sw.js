@@ -12,7 +12,7 @@
 //     filled in offline are queued by the page itself (see src/offline-queue.js).
 //
 // Bump VERSION to force every installed copy to drop its saved files.
-const VERSION = "v1";
+const VERSION = "v2";
 const SHELL_CACHE = `ha-shell-${VERSION}`;
 const RUNTIME_CACHE = `ha-runtime-${VERSION}`;
 const RUNTIME_LIMIT = 80;
@@ -24,7 +24,7 @@ const PRECACHE = [
   "/logo-black.png",
   "/logo-white.png",
   "/icons/icon-192.png",
-  "/icons/favicon.svg"
+  "/favicon.ico"
 ];
 
 self.addEventListener("install", event => {
