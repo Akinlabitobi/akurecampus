@@ -11,6 +11,7 @@ const navItems = [
   ["workforce", "Workforce"],
   ["partnership", "Partnership"],
   ["attendance", "Attendance"],
+  ["birthdays", "Birthdays"],
   ["gallery", "Gallery"],
   ["contact", "Contact"]
 ];
@@ -115,6 +116,10 @@ let broadcastNoteType = "";
 // The community/department picked on the Communities or Workforce page. The
 // signup form stays hidden until one is picked, then opens with it locked in.
 let selectedChoice = { community: "", workforce: "" };
+// The birthday photo, already shrunk to a JPEG data URL in the browser (see
+// preparePhoto), kept outside the DOM so a re-render doesn't lose it.
+let birthdayPhoto = "";
+let birthdayPhotoBusy = false;
 
 function icon(name) {
   const paths = {
@@ -131,13 +136,18 @@ function icon(name) {
     phone: '<path d="M13.8 16.6a1 1 0 0 0 1.2-.3l.4-.5A2 2 0 0 1 17 15h3a2 2 0 0 1 2 2v3a2 2 0 0 1-2 2A18 18 0 0 1 2 4a2 2 0 0 1 2-2h3a2 2 0 0 1 2 2v3a2 2 0 0 1-.8 1.6l-.5.4a1 1 0 0 0-.3 1.2 14 14 0 0 0 6.4 6.4"></path>',
     chart: '<path d="M3 3v18h18"></path><path d="m7 15 4-4 3 3 5-7"></path>',
     calendar: '<path d="M8 2v4"></path><path d="M16 2v4"></path><rect width="18" height="18" x="3" y="4" rx="2"></rect><path d="M3 10h18"></path>',
+    camera: '<path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3z"></path><circle cx="12" cy="13" r="3"></circle>',
+    cake: '<path d="M20 21v-8a2 2 0 0 0-2-2H6a2 2 0 0 0-2 2v8"></path><path d="M4 16s.5-1 2-1 2.5 2 4 2 2.5-2 4-2 2.5 2 4 2 2-1 2-1"></path><path d="M2 21h20"></path><path d="M7 8v3"></path><path d="M12 8v3"></path><path d="M17 8v3"></path><path d="M7 4h.01"></path><path d="M12 4h.01"></path><path d="M17 4h.01"></path>',
     check: '<path d="M20 6 9 17l-5-5"></path>'
   };
   return `<svg class="icon" viewBox="0 0 24 24" aria-hidden="true">${paths[name] || paths.arrow}</svg>`;
 }
 
 function navigate(view, options = {}) {
-  if (view !== activeView) selectedChoice = { community: "", workforce: "" };
+  if (view !== activeView) {
+    selectedChoice = { community: "", workforce: "" };
+    birthdayPhoto = "";
+  }
   activeView = view;
   menuOpen = false;
   window.scrollTo({ top: 0, behavior: "smooth" });
@@ -544,6 +554,7 @@ function simplePage(kind) {
     workforce: ["Join the Workforce", "Serve with your gifts and help build the Akure campus from the beginning.", workforcePage()],
     partnership: ["Partnership", "Partner through prayer, finance, media, venue support, logistics, or professional skills.", partnershipPage()],
     attendance: ["Attendance", "Mark attendance with today's daily code.", attendancePage()],
+    birthdays: ["Birthday Celebrations", "Share your birthday with the Harvesters Akure family so we can celebrate you.", birthdayPage()],
     gallery: ["Gallery", "A growing archive of launch, worship, outreach, and community moments.", gallerySection() + formPage("Gallery Upload or Content Idea", ["Full name", "Email address", "Subject", "Message"], "content")],
     contact: ["Contact Us", "Reach the Akure launch team and stay updated.", contactPage()]
   };
@@ -682,6 +693,105 @@ function attendancePage() {
   `;
 }
 
+function birthdayPage() {
+  return `
+    <section class="section">
+      <div class="container split">
+        <div>
+          <span class="label">Celebrate With Us</span>
+          <h2>We Love To Celebrate Our Family</h2>
+          <p>Send your name, phone number, birthday, and a clear photo of yourself. When your day comes, the Harvesters Akure family will celebrate and pray with you.</p>
+          <div class="attendance-steps">
+            <div><strong>1</strong><span>Fill in your details and add a photo</span></div>
+            <div><strong>2</strong><span>The team keeps it safe for your special day</span></div>
+            <div><strong>3</strong><span>We celebrate you on your birthday</span></div>
+          </div>
+          <p class="muted">Already sent your details? Send them again with the same name and phone number at any time to update your photo or birthday.</p>
+        </div>
+        <form class="form" data-birthday-form novalidate>
+          <h3>Birthday Details</h3>
+          <label><span>Full name</span><input name="fullName" placeholder="Full name" autocomplete="name" required /></label>
+          <label><span>Phone number</span><input name="phoneNumber" type="tel" placeholder="Phone number" autocomplete="tel" required /></label>
+          <label><span>Date of birth</span><input name="dateOfBirth" type="date" min="1900-01-01" max="${localDateKey(new Date())}" required /></label>
+          <div class="photo-field">
+            <span>Your photo</span>
+            <label class="photo-picker ${birthdayPhoto ? "has-photo" : ""}">
+              <input name="photo" type="file" accept="image/jpeg,image/png,image/webp,image/heic,image/heif" data-birthday-photo />
+              <span class="photo-preview">${birthdayPhoto ? `<img src="${birthdayPhoto}" alt="Selected photo" />` : icon("camera")}</span>
+              <span class="photo-copy">
+                <strong>${birthdayPhotoBusy ? "Preparing photo..." : birthdayPhoto ? "Change photo" : "Add a photo"}</strong>
+                <small>A clear, recent picture of your face. JPEG or PNG.</small>
+              </span>
+            </label>
+          </div>
+          <label class="consent"><input name="photoConsent" type="checkbox" /> <span>I'm happy for Harvesters Akure to share this photo and my name when celebrating my birthday.</span></label>
+          <button class="btn primary block" type="submit">Send My Birthday ${icon("arrow")}</button>
+          <p class="form-note">Your phone number stays private to the team.</p>
+        </form>
+      </div>
+    </section>
+  `;
+}
+
+const MONTHS = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+
+function localDateKey(date) {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}-${String(date.getDate()).padStart(2, "0")}`;
+}
+
+function birthdayLabel(dateOfBirth) {
+  const [, month, day] = String(dateOfBirth || "").split("-").map(Number);
+  return month && day ? `${day} ${MONTHS[month - 1]}` : "-";
+}
+
+// Days from today until the next birthday (0 = today) and the age being
+// turned. 29 February birthdays are celebrated on 28 February in non-leap
+// years rather than rolling over to 1 March.
+function nextBirthday(dateOfBirth, today = new Date()) {
+  const [year, month, day] = String(dateOfBirth || "").split("-").map(Number);
+  if (!year || !month || !day) return null;
+  const start = new Date(today.getFullYear(), today.getMonth(), today.getDate());
+  const occurrence = targetYear => {
+    const isLeap = new Date(targetYear, 1, 29).getMonth() === 1;
+    return new Date(targetYear, month - 1, month === 2 && day === 29 && !isLeap ? 28 : day);
+  };
+  let next = occurrence(start.getFullYear());
+  if (next < start) next = occurrence(start.getFullYear() + 1);
+  return { days: Math.round((next - start) / 86_400_000), age: next.getFullYear() - year, date: next };
+}
+
+function escapeHtml(value) {
+  return String(value ?? "").replace(/[&<>"']/g, chr => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" })[chr]);
+}
+
+// Phone cameras produce 3-12MB photos; shrinking to at most 1200px JPEG in
+// the browser keeps uploads quick on mobile data and well under the server's
+// size limit. Drawing through an <img> also applies the photo's EXIF
+// rotation, so sideways phone pictures come out upright.
+function preparePhoto(file) {
+  return new Promise((resolvePhoto, reject) => {
+    const url = URL.createObjectURL(file);
+    const image = new Image();
+    image.onload = () => {
+      URL.revokeObjectURL(url);
+      const scale = Math.min(1, 1200 / Math.max(image.naturalWidth, image.naturalHeight));
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.round(image.naturalWidth * scale);
+      canvas.height = Math.round(image.naturalHeight * scale);
+      const context = canvas.getContext("2d");
+      context.fillStyle = "#ffffff";
+      context.fillRect(0, 0, canvas.width, canvas.height);
+      context.drawImage(image, 0, 0, canvas.width, canvas.height);
+      resolvePhoto(canvas.toDataURL("image/jpeg", 0.85));
+    };
+    image.onerror = () => {
+      URL.revokeObjectURL(url);
+      reject(new Error("This photo could not be opened. Please choose a JPEG or PNG picture."));
+    };
+    image.src = url;
+  });
+}
+
 function contactPage() {
   return `
     <section class="section">
@@ -780,6 +890,7 @@ function dashboard() {
     ["communities", "Communities", true],
     ["workforce", "Workforce", true],
     ["attendance", "Attendance", true],
+    ["birthdays", "Birthdays", true],
     ["giving", "Giving", true],
     ["care", "Care", true],
     ["newsletter", "Newsletter", true],
@@ -806,7 +917,7 @@ function dashboard() {
             <span class="label">Dashboard</span>
             <h1>${tabs.find(([id]) => id === activeDashboard)?.[1] || "Overview"}</h1>
           </div>
-          ${can("export_data") ? `<button class="btn primary" data-export>${activeDashboard === "communities" ? "Export Communities CSV" : activeDashboard === "workforce" ? "Export Workforce CSV" : "Export CSV"}</button>` : ""}
+          ${can("export_data") ? `<button class="btn primary" data-export>${activeDashboard === "communities" ? "Export Communities CSV" : activeDashboard === "workforce" ? "Export Workforce CSV" : activeDashboard === "birthdays" ? "Export Birthdays CSV" : "Export CSV"}</button>` : ""}
         </header>
         ${adminSession.mustChangePassword ? passwordNudge() : ""}
         ${dashboardContent()}
@@ -862,6 +973,7 @@ function dashboardContent() {
     const rows = records.map(row => [row.fields.name || "-", row.fields.attendanceCode || row.fields.shortCode || "-", row.fields.phone || "-", row.fields.department || "-", row.fields.service || "-", new Date(row.createdAt).toLocaleString()]);
     return `<div class="metric-grid"><article class="metric large"><span>Today's Code</span><strong>${dashboardData.dailyAttendance?.code || "-"}</strong><small>${dashboardData.dailyAttendance?.date || ""}</small></article><article class="metric large"><span>Total Check-Ins</span><strong>${metrics.attendance}</strong><small>attendance records</small></article></div>${editableTable(["Name", "Code", "Phone", "Department", "Service", "Time"], rows, records)}`;
   }
+  if (activeDashboard === "birthdays") return birthdaysTab(submissions);
   if (activeDashboard === "giving") {
     const records = submissions.filter(row => ["giving", "partnership"].includes(row.type));
     const rows = records.map(row => [row.type, recordCode(row), row.fields.fullName || "-", row.fields.phoneNumber || "-", row.fields.fund || row.fields.partnershipType || "-", row.fields.amount ? money(row.fields.amount) : "-", new Date(row.createdAt).toLocaleDateString()]);
@@ -894,6 +1006,56 @@ function dashboardContent() {
     <div class="table"><table><thead><tr>${launchHeaders.map(h => `<th>${h}</th>`).join("")}</tr></thead><tbody>${launchRows}</tbody></table></div>
     ${canManageContent ? launchItemForm(editingItem) : ""}
     <div class="table section-table">${table(["Name", "Title", "Note", "Date"], rows)}</div>
+  `;
+}
+
+// Sorted by how soon each birthday comes round, so the people to celebrate
+// next are always at the top.
+function birthdaysTab(submissions) {
+  const today = new Date();
+  const records = submissions
+    .filter(row => row.type === "birthday")
+    .map(row => ({ row, next: nextBirthday(row.fields.dateOfBirth, today) }))
+    .sort((a, b) => (a.next?.days ?? 999) - (b.next?.days ?? 999) || String(a.row.fields.fullName).localeCompare(String(b.row.fields.fullName)));
+  const within = days => records.filter(({ next }) => next && next.days <= days);
+  const thisMonth = records.filter(({ next }) => next && next.date.getMonth() === today.getMonth() && next.date.getFullYear() === today.getFullYear());
+  const photoUrl = row => `/api/admin/birthday-photo/${encodeURIComponent(row.id)}`;
+  const photoCell = row => row.fields.photoPath
+    ? `<a class="birthday-thumb" href="${photoUrl(row)}?download" title="Download photo"><img src="${photoUrl(row)}" alt="${escapeHtml(row.fields.fullName)}" loading="lazy" /></a>`
+    : "-";
+  const whenLabel = next => !next ? "-" : next.days === 0 ? `<strong class="today-badge">Today</strong>` : next.days === 1 ? "Tomorrow" : `In ${next.days} days`;
+  const celebrants = within(0);
+  const rows = records.map(({ row, next }) => [
+    photoCell(row),
+    escapeHtml(row.fields.fullName || "-"),
+    escapeHtml(row.fields.phoneNumber || "-"),
+    birthdayLabel(row.fields.dateOfBirth),
+    next ? String(next.age) : "-",
+    whenLabel(next)
+  ]);
+  return `
+    <div class="metric-grid">
+      <article class="metric large"><span>Today</span><strong>${celebrants.length}</strong><small>${birthdayLabel(localDateKey(today))}</small></article>
+      <article class="metric large"><span>Next 7 Days</span><strong>${within(7).length}</strong><small>including today</small></article>
+      <article class="metric large"><span>This Month</span><strong>${thisMonth.length}</strong><small>${MONTHS[today.getMonth()]}</small></article>
+      <article class="metric large"><span>Total</span><strong>${records.length}</strong><small>birthdays saved</small></article>
+    </div>
+    ${celebrants.length ? `
+      <div class="panel">
+        <h3>Celebrating Today</h3>
+        <div class="celebrant-grid">
+          ${celebrants.map(({ row, next }) => `
+            <article class="celebrant">
+              ${row.fields.photoPath ? `<img src="${photoUrl(row)}" alt="${escapeHtml(row.fields.fullName)}" />` : `<div class="celebrant-placeholder">${icon("cake")}</div>`}
+              <strong>${escapeHtml(row.fields.fullName)}</strong>
+              <small>Turning ${next.age} &middot; ${escapeHtml(row.fields.phoneNumber)}</small>
+              ${row.fields.photoPath ? `<a class="btn outline small" href="${photoUrl(row)}?download">Download Photo</a>` : ""}
+            </article>
+          `).join("")}
+        </div>
+      </div>
+    ` : ""}
+    ${editableTable(["Photo", "Name", "Phone", "Birthday", "Turning", "When"], rows, records.map(({ row }) => row))}
   `;
 }
 
@@ -1226,7 +1388,7 @@ function render() {
   }));
   document.body.classList.toggle("modal-open", Boolean(document.querySelector(".form-modal")));
   document.querySelector("[data-export]")?.addEventListener("click", () => {
-    const type = activeDashboard === "communities" ? "community" : activeDashboard === "workforce" ? "workforce" : "";
+    const type = { communities: "community", workforce: "workforce", birthdays: "birthday" }[activeDashboard] || "";
     window.location.href = type ? `/api/export?type=${type}` : "/api/export";
   });
   const menu = document.querySelector("[data-menu]");
@@ -1272,6 +1434,11 @@ function render() {
     event.preventDefault();
     saveAttendance(form);
   }));
+  document.querySelector("[data-birthday-photo]")?.addEventListener("change", event => choosePhoto(event.target));
+  document.querySelector("[data-birthday-form]")?.addEventListener("submit", event => {
+    event.preventDefault();
+    saveBirthday(event.target);
+  });
   document.querySelector("[data-login-form]")?.addEventListener("submit", async event => {
     event.preventDefault();
     const fields = Object.fromEntries(new FormData(event.target).entries());
@@ -1489,6 +1656,79 @@ async function loadDailyAttendanceCode() {
     if (input && !input.value) input.value = result.code;
   } catch (error) {
     codeCard.innerHTML = `<span>Today's code</span><strong>Unavailable</strong><small>${error.message}</small>`;
+  }
+}
+
+function updatePhotoPicker(form) {
+  const picker = form.querySelector(".photo-picker");
+  picker.classList.toggle("has-photo", Boolean(birthdayPhoto));
+  picker.querySelector(".photo-preview").innerHTML = birthdayPhoto ? `<img src="${birthdayPhoto}" alt="Selected photo" />` : icon("camera");
+  picker.querySelector(".photo-copy strong").textContent = birthdayPhotoBusy ? "Preparing photo..." : birthdayPhoto ? "Change photo" : "Add a photo";
+}
+
+async function choosePhoto(input) {
+  const form = input.form;
+  const note = form.querySelector(".form-note");
+  const file = input.files?.[0];
+  if (!file) return;
+  birthdayPhotoBusy = true;
+  updatePhotoPicker(form);
+  try {
+    birthdayPhoto = await preparePhoto(file);
+    note.className = "form-note";
+    note.textContent = "Photo added.";
+  } catch (error) {
+    note.className = "form-note error";
+    note.textContent = error.message;
+  } finally {
+    birthdayPhotoBusy = false;
+    input.value = "";
+    updatePhotoPicker(form);
+  }
+}
+
+async function saveBirthday(form) {
+  const note = form.querySelector(".form-note");
+  const button = form.querySelector("button[type='submit']");
+  const fields = Object.fromEntries(new FormData(form).entries());
+  delete fields.photo;
+  const showError = message => {
+    note.className = "form-note error";
+    note.textContent = message;
+  };
+  if (!fields.fullName.trim()) return showError("Please enter your full name.");
+  if (fields.phoneNumber.replace(/\D/g, "").length < 7) return showError("Please enter a valid phone number.");
+  if (!fields.dateOfBirth) return showError("Please enter your date of birth.");
+  if (birthdayPhotoBusy) return showError("Your photo is still being prepared. Please wait a moment.");
+  if (!birthdayPhoto) return showError("Please add a photo of yourself.");
+  if (!fields.photoConsent) return showError("Please tick the box to confirm we may share your photo on your birthday.");
+  const submissionId = form.dataset.submissionId || crypto.randomUUID();
+  form.dataset.submissionId = submissionId;
+  note.className = "form-note";
+  note.textContent = "Sending...";
+  button.disabled = true;
+  try {
+    const response = await fetch("/api/birthdays", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ...fields, photo: birthdayPhoto, submissionId })
+    });
+    const result = await response.json().catch(() => ({}));
+    if (!response.ok) throw new Error(result.error || "Could not save your birthday. Please try again.");
+    const firstName = fields.fullName.trim().split(/\s+/)[0];
+    form.reset();
+    delete form.dataset.submissionId;
+    birthdayPhoto = "";
+    updatePhotoPicker(form);
+    dashboardData = null;
+    note.className = "form-note success";
+    note.textContent = result.updated
+      ? `Thanks, ${firstName}! Your birthday details have been updated.`
+      : `Thank you, ${firstName}! We look forward to celebrating you on ${birthdayLabel(fields.dateOfBirth)}.`;
+  } catch (error) {
+    showError(error.message);
+  } finally {
+    button.disabled = false;
   }
 }
 

@@ -2069,3 +2069,138 @@ body.modal-open {
   background: var(--red);
   border-color: var(--red);
 }
+
+/* Birthday page: photo picker with a round live preview. The file input is
+   visually hidden but stays focusable, so keyboard users can still open it. */
+.photo-field {
+  display: grid;
+  gap: 7px;
+  color: var(--navy);
+  font-size: 0.82rem;
+  font-weight: 800;
+}
+
+.form label.photo-picker {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 14px;
+  border: 1px dashed var(--line);
+  border-radius: 8px;
+  background: var(--soft);
+  cursor: pointer;
+  transition: border-color 0.2s ease;
+}
+
+.form label.photo-picker:hover,
+.form label.photo-picker:focus-within {
+  border-color: var(--red);
+}
+
+.form label.photo-picker.has-photo {
+  border-style: solid;
+}
+
+.form .photo-picker input[type="file"] {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  min-height: 0;
+  padding: 0;
+  opacity: 0;
+}
+
+.photo-preview {
+  width: 84px;
+  height: 84px;
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
+  overflow: hidden;
+  color: var(--red);
+  background: var(--white);
+  border: 1px solid var(--line);
+  border-radius: 50%;
+}
+
+.photo-preview img {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.photo-copy {
+  display: grid;
+  gap: 4px;
+}
+
+.photo-copy strong {
+  color: var(--navy);
+  font-size: 0.95rem;
+}
+
+.photo-copy small {
+  color: var(--muted);
+  font-weight: 600;
+  line-height: 1.4;
+}
+
+/* Birthday dashboard tab */
+.birthday-thumb img {
+  width: 44px;
+  height: 44px;
+  display: block;
+  object-fit: cover;
+  border-radius: 50%;
+  background: var(--soft);
+}
+
+.today-badge {
+  padding: 3px 8px;
+  color: var(--white);
+  background: var(--red);
+  border-radius: 8px;
+  font-size: 0.78rem;
+}
+
+.celebrant-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
+  gap: 14px;
+}
+
+.celebrant {
+  display: grid;
+  justify-items: center;
+  gap: 6px;
+  padding: 18px 14px;
+  text-align: center;
+  background: var(--soft);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+}
+
+.celebrant img,
+.celebrant-placeholder {
+  width: 96px;
+  height: 96px;
+  object-fit: cover;
+  border-radius: 50%;
+}
+
+.celebrant-placeholder {
+  display: grid;
+  place-items: center;
+  color: var(--red);
+  background: var(--white);
+}
+
+.celebrant strong {
+  color: var(--navy);
+}
+
+.celebrant small {
+  color: var(--muted);
+  font-weight: 700;
+}

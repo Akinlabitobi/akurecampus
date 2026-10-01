@@ -1,6 +1,6 @@
 import { createServer } from "node:http";
 import { randomUUID, randomBytes, scryptSync, timingSafeEqual } from "node:crypto";
-import { existsSync, mkdirSync, readFileSync, writeFileSync, statSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, writeFileSync, statSync, unlinkSync } from "node:fs";
 import { extname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createClient } from "@supabase/supabase-js";
@@ -32,6 +32,16 @@ const useSupabase = Boolean(supabaseUrl && supabaseServiceKey);
 const supabase = useSupabase
   ? createClient(supabaseUrl, supabaseServiceKey, { auth: { persistSession: false } })
   : null;
+
+// Birthday photos are kept out of the submissions table on purpose: every
+// write re-syncs that whole table and the dashboard ships every row to the
+// browser, so a few hundred embedded images would make both crawl. Only the
+// photo's path is stored on the record; the bytes live in a private Supabase
+// Storage bucket (or data/birthday-photos locally) and are only ever served
+// to signed-in admins.
+const birthdayPhotoBucket = "birthday-photos";
+const birthdayPhotoDir = join(dataDir, "birthday-photos");
+const MAX_PHOTO_BYTES = 1_500_000;
 
 const ALL_PERMISSIONS = [
   "view_dashboard",
@@ -411,12 +421,12 @@ function send(res, status, body, type = "application/json; charset=utf-8") {
   res.end(JSON.stringify(body));
 }
 
-function parseBody(req) {
+function parseBody(req, maxLength = 1_000_000) {
   return new Promise((resolveBody, reject) => {
     let raw = "";
     req.on("data", chunk => {
       raw += chunk;
-      if (raw.length > 1_000_000) reject(new Error("Request body too large"));
+      if (raw.length > maxLength) reject(new Error("Request body too large"));
     });
     req.on("end", () => {
       try {
@@ -515,6 +525,7 @@ function dashboard(db) {
       attendance: byType("attendance").length,
       nlp: byType("nlp").length,
       content: byType("content").length,
+      birthday: byType("birthday").length,
       total: submissions.length,
       fundsPercent,
       readiness: db.seed.readiness
@@ -594,6 +605,113 @@ function csvWorkforce(items) {
     record.createdAt
   ]);
   return toCsv(headers, rows);
+}
+
+const MONTH_NAMES = ["January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December"];
+
+function birthdayLabel(dateOfBirth) {
+  const [, month, day] = String(dateOfBirth || "").split("-").map(Number);
+  return month && day ? `${day} ${MONTH_NAMES[month - 1]}` : "";
+}
+
+function csvBirthdays(items, origin) {
+  // Grouped by calendar birthday (month, then day), not by birth year, so the
+  // export reads as a celebration calendar from January to December.
+  const sorted = sortByFields(items, [record => String(record.fields.dateOfBirth || "").slice(5), record => record.fields.fullName]);
+  const headers = ["Code", "Name", "Phone", "Birthday", "Date of Birth", "Photo", "Date Added"];
+  const rows = sorted.map(record => [
+    record.shortCode || makeShortCode(record.id),
+    record.fields.fullName || "",
+    record.fields.phoneNumber || "",
+    birthdayLabel(record.fields.dateOfBirth),
+    record.fields.dateOfBirth || "",
+    record.fields.photoPath ? `${origin}/api/admin/birthday-photo/${record.id}` : "",
+    record.createdAt
+  ]);
+  return toCsv(headers, rows);
+}
+
+// Accepts only a base64 data URL whose bytes really are a JPEG, PNG or WebP
+// (checked by signature, not just the declared type), since these bytes are
+// later served back to admins with an image content type.
+function parsePhoto(value) {
+  const match = /^data:image\/(jpeg|png|webp);base64,([A-Za-z0-9+/=]+)$/.exec(String(value || ""));
+  if (!match) throw new Error("Please add a photo (JPEG, PNG or WebP).");
+  const buffer = Buffer.from(match[2], "base64");
+  if (buffer.length > MAX_PHOTO_BYTES) throw new Error("That photo is too large. Please choose a smaller one.");
+  const signatures = {
+    jpeg: buffer[0] === 0xff && buffer[1] === 0xd8,
+    png: buffer.subarray(0, 4).toString("hex") === "89504e47",
+    webp: buffer.subarray(0, 4).toString() === "RIFF" && buffer.subarray(8, 12).toString() === "WEBP"
+  };
+  if (!signatures[match[1]]) throw new Error("That file does not look like a valid image.");
+  return { buffer, contentType: `image/${match[1]}`, extension: match[1] === "jpeg" ? "jpg" : match[1] };
+}
+
+async function savePhoto(path, photo) {
+  if (!useSupabase) {
+    mkdirSync(birthdayPhotoDir, { recursive: true });
+    writeFileSync(join(birthdayPhotoDir, path), photo.buffer);
+    return;
+  }
+  const upload = () => supabase.storage.from(birthdayPhotoBucket).upload(path, photo.buffer, { contentType: photo.contentType, upsert: true });
+  let { error } = await upload();
+  if (error && /bucket not found/i.test(error.message)) {
+    // First photo ever on this Supabase project: create the private bucket
+    // instead of requiring a manual dashboard step before the form works.
+    const created = await supabase.storage.createBucket(birthdayPhotoBucket, { public: false });
+    if (created.error && !/already exists/i.test(created.error.message)) assertNoError(created.error, "create bucket (birthday-photos)");
+    ({ error } = await upload());
+  }
+  assertNoError(error, "upload (birthday-photos)");
+}
+
+async function readPhoto(path) {
+  if (!useSupabase) {
+    const filePath = join(birthdayPhotoDir, path);
+    return existsSync(filePath) ? readFileSync(filePath) : null;
+  }
+  const { data, error } = await supabase.storage.from(birthdayPhotoBucket).download(path);
+  if (error || !data) return null;
+  return Buffer.from(await data.arrayBuffer());
+}
+
+// Best-effort: a leftover file is harmless, a failed record deletion is not.
+async function deletePhoto(path) {
+  try {
+    if (!useSupabase) {
+      const filePath = join(birthdayPhotoDir, path);
+      if (existsSync(filePath)) unlinkSync(filePath);
+      return;
+    }
+    await supabase.storage.from(birthdayPhotoBucket).remove([path]);
+  } catch {
+    // ignore
+  }
+}
+
+function validateBirthday(body) {
+  const fields = {
+    fullName: cleanText(body.fullName).slice(0, 120),
+    phoneNumber: cleanText(body.phoneNumber).slice(0, 30),
+    dateOfBirth: cleanText(body.dateOfBirth),
+    photoConsent: body.photoConsent === "on" ? "on" : ""
+  };
+  if (!fields.fullName) throw new Error("Please enter the celebrant's full name.");
+  if (fields.phoneNumber.replace(/\D/g, "").length < 7) throw new Error("Please enter a valid phone number.");
+  const date = new Date(`${fields.dateOfBirth}T00:00:00Z`);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(fields.dateOfBirth) || Number.isNaN(date.getTime()) || date.toISOString().slice(0, 10) !== fields.dateOfBirth) {
+    throw new Error("Please enter a valid date of birth.");
+  }
+  if (fields.dateOfBirth < "1900-01-01" || fields.dateOfBirth > lagosDateKey()) throw new Error("Please enter a date of birth in the past.");
+  if (!fields.photoConsent) throw new Error("Please confirm we may share the photo when celebrating the birthday.");
+  return fields;
+}
+
+function sameCelebrant(record, fields) {
+  return record.type === "birthday"
+    && record.fields.phoneNumber.replace(/\D/g, "").slice(-10) === fields.phoneNumber.replace(/\D/g, "").slice(-10)
+    && record.fields.fullName.toLowerCase().replace(/\s+/g, " ") === fields.fullName.toLowerCase().replace(/\s+/g, " ");
 }
 
 function hasCommunicationsConsent(record) {
@@ -794,6 +912,60 @@ async function handleApi(req, res, url) {
     return true;
   }
 
+  if (url.pathname === "/api/birthdays" && req.method === "POST") {
+    try {
+      const body = await parseBody(req, 2_500_000);
+      const fields = validateBirthday(body);
+      const photo = parsePhoto(body.photo);
+      const db = await readDb();
+      const submissionId = cleanText(body.submissionId || "");
+      // A retried request (same submissionId) or the same person sending
+      // their details again updates the one record instead of duplicating
+      // them, so people can come back any time to change their photo.
+      const existing = db.submissions.find(record => record.type === "birthday" && (record.id === submissionId || sameCelebrant(record, fields)));
+      const record = existing || {
+        id: submissionId || randomUUID(),
+        type: "birthday",
+        fields: {},
+        shortCode: createShortCode(db),
+        status: "New",
+        createdAt: new Date().toISOString()
+      };
+      const previousPhotoPath = record.fields.photoPath;
+      const photoPath = `${record.id}.${photo.extension}`;
+      await savePhoto(photoPath, photo);
+      record.fields = { ...record.fields, ...fields, name: fields.fullName, photoPath, photoType: photo.contentType };
+      if (existing) record.updatedAt = new Date().toISOString();
+      else db.submissions.push(record);
+      await writeDb(db);
+      if (previousPhotoPath && previousPhotoPath !== photoPath) await deletePhoto(previousPhotoPath);
+      send(res, existing ? 200 : 201, { record, updated: Boolean(existing) });
+    } catch (error) {
+      send(res, 400, { error: error.message });
+    }
+    return true;
+  }
+
+  const birthdayPhotoMatch = url.pathname.match(/^\/api\/admin\/birthday-photo\/([^/]+)$/);
+  if (birthdayPhotoMatch && req.method === "GET") {
+    const db = await readDb();
+    if (!requireAdminSession(req, res, db, "view_dashboard")) return true;
+    const record = db.submissions.find(item => item.id === birthdayPhotoMatch[1] && item.type === "birthday");
+    const bytes = record?.fields.photoPath ? await readPhoto(record.fields.photoPath) : null;
+    if (!bytes) {
+      send(res, 404, { error: "Photo not found." });
+      return true;
+    }
+    res.writeHead(200, {
+      "Content-Type": record.fields.photoType || "image/jpeg",
+      "Cache-Control": "private, max-age=3600",
+      "X-Content-Type-Options": "nosniff",
+      ...(url.searchParams.has("download") ? { "Content-Disposition": `attachment; filename="${record.fields.photoPath}"` } : {})
+    });
+    res.end(bytes);
+    return true;
+  }
+
   if (url.pathname === "/api/admin/login" && req.method === "POST") {
     try {
       const body = await parseBody(req);
@@ -873,6 +1045,7 @@ async function handleApi(req, res, url) {
       const [removed] = db.submissions.splice(index, 1);
       addAuditLog(db, ctx.admin, "Deleted submission", `${removed.type} - ${removed.shortCode || removed.id}`);
       await writeDb(db);
+      if (removed.fields?.photoPath) await deletePhoto(removed.fields.photoPath);
       send(res, 200, { ok: true, dashboard: dashboard(db) });
       return true;
     }
@@ -1199,6 +1372,10 @@ async function handleApi(req, res, url) {
     } else if (type === "workforce") {
       body = csvWorkforce(db.submissions.filter(record => record.type === "workforce"));
       filename = "harvesters-akure-workforce.csv";
+    } else if (type === "birthday") {
+      const protocol = String(req.headers["x-forwarded-proto"] || url.protocol.replace(":", "")).split(",")[0];
+      body = csvBirthdays(db.submissions.filter(record => record.type === "birthday"), `${protocol}://${url.host}`);
+      filename = "harvesters-akure-birthdays.csv";
     } else {
       body = csv(db.submissions);
       filename = "harvesters-akure-submissions.csv";
