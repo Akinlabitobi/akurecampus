@@ -15,7 +15,6 @@ const navItems = [
   ["counselling", "Counselling"],
   ["workforce", "Workforce"],
   ["partnership", "Partnership"],
-  ["attendance", "Attendance"],
   ["birthdays", "Birthdays"],
   ["gallery", "Gallery"],
   ["contact", "Contact"],
@@ -27,8 +26,9 @@ const navItems = [
 // dist/<path>/index.html per view carrying its tags (see src/share-meta.js).
 // Old "#birthdays"-style links still work and are rewritten to the path.
 // "admin" is the friendly public name for the "dashboard" view.
+// "attendance" is linked from the footer only, not the main menu.
 const PATH_ALIASES = { admin: "dashboard" };
-const VALID_VIEWS = [...navItems.map(([id]) => id), "dashboard"];
+const VALID_VIEWS = [...navItems.map(([id]) => id), "attendance", "dashboard"];
 
 function viewFromLocation() {
   const pick = raw => {
@@ -385,7 +385,6 @@ function home() {
           <p>A Harvesters family is gathering in the city for prayer, worship, friendship, service, and spiritual growth.</p>
           <div class="hero-actions">
             <button class="btn primary xl" data-nav="communities">Join Community ${icon("arrow")}</button>
-            <button class="btn ghost xl" data-nav="attendance">Mark Attendance</button>
             <button class="btn ghost xl" data-nav="workforce">Serve</button>
           </div>
         </div>
@@ -1939,7 +1938,7 @@ function footer() {
       <div class="footer-main">
         <div><img src="/logo-white.png" alt="Harvesters Akure" /><p>A campus of Harvesters International Christian Centre, coming to Akure.</p></div>
         <div><h4>The Church</h4><button data-nav="about">About Harvesters Akure</button><button data-nav="nlp">Next Level Prayers</button><button data-nav="gallery">Gallery</button></div>
-        <div><h4>Get Involved</h4><button data-nav="communities">Join a Community</button><button data-nav="workforce">Join the Workforce</button><button data-nav="partnership">Partner With Us</button><button data-nav="birthdays">Birthday Celebrations</button><button data-nav="profile">My Profile</button><button type="button" data-install ${isStandalone() ? "hidden" : ""}>Install the App</button></div>
+        <div><h4>Get Involved</h4><button data-nav="communities">Join a Community</button><button data-nav="workforce">Join the Workforce</button><button data-nav="partnership">Partner With Us</button><button data-nav="birthdays">Birthday Celebrations</button><button data-nav="profile">My Profile</button><button data-nav="attendance">Mark Attendance</button><button type="button" data-install ${isStandalone() ? "hidden" : ""}>Install the App</button></div>
         <div><h4>Contact</h4><p>Akure, Ondo State</p><a href="${contactInfo.phoneHref}">${contactInfo.phone}</a><p>akure@harvestersng.org</p><div class="footer-social">${socialLinks.map(social => `<a href="${social.url}" target="_blank" rel="noopener noreferrer" aria-label="${social.name} ${social.handle}" title="${social.name} ${social.handle}">${icon(social.name.toLowerCase())}</a>`).join("")}</div><button data-nav="dashboard">Team Dashboard</button><a href="/callcentre/">Outreach Call Centre</a></div>
       </div>
       <div class="copyright">© 2026 Harvesters Akure. A campus of Harvesters International Christian Centre.</div>
