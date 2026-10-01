@@ -185,8 +185,6 @@ function migrateDb(db) {
   if (!Array.isArray(db.admins)) { db.admins = []; changed = true; }
   if (!Array.isArray(db.sessions)) { db.sessions = []; changed = true; }
   if (!Array.isArray(db.auditLog)) { db.auditLog = []; changed = true; }
-  if (!Array.isArray(db.memberOtps)) { db.memberOtps = []; changed = true; }
-  if (!Array.isArray(db.memberSessions)) { db.memberSessions = []; changed = true; }
   if (!db.seed) { db.seed = { readiness: 72, fundsTarget: 12000000, launchItems: [] }; changed = true; }
   if (!Array.isArray(db.seed.launchItems)) { db.seed.launchItems = []; changed = true; }
   db.seed.launchItems.forEach(item => {
@@ -587,7 +585,11 @@ function dailyAttendanceCode(dateKey = lagosDateKey()) {
 }
 
 function dashboard(db) {
-  const submissions = db.submissions;
+  const submissions = db.submissions.map(record => {
+    if (!record.fields?.signInCode) return record;
+    const { signInCode, ...fields } = record.fields;
+    return { ...record, fields };
+  });
   const byType = type => submissions.filter(item => item.type === type);
   const totalGiving = byType("giving").reduce((sum, item) => sum + Number(item.fields.amount || 0), 0);
   const recent = [...submissions].sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt)).slice(0, 10);
@@ -885,9 +887,11 @@ function idList(value, allowed) {
 // are unverified, so linking by phone would let someone type a stranger's
 // number next to their own email and read that person's records.
 //
-// Sign-in codes and member sessions are read and written with targeted
-// queries on their own tables rather than through readDb/writeDb, so the
-// rest of the site keeps working even before those tables exist in Supabase.
+// No extra tables are needed: a pending sign-in code (hashed) is kept on the
+// member's own "member" record, and member sessions live in the same
+// sessions table as admin sessions, keyed "member:<hash of token>" with the
+// member record's id in adminId. Those keys can never match an admin cookie
+// or an admin id, so the two kinds of session can't be confused.
 
 const MEMBER_SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 const OTP_TTL_MS = 10 * 60 * 1000;
@@ -896,10 +900,7 @@ const OTP_MAX_SENDS_PER_HOUR = 5;
 const OTP_MAX_ATTEMPTS = 5;
 const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const memberCodeRequests = new Map();
-const MEMBER_STORES = {
-  otp: { table: "harvesters_member_otps", key: "email", fileKey: "memberOtps" },
-  session: { table: "harvesters_member_sessions", key: "tokenHash", fileKey: "memberSessions" }
-};
+const MEMBER_SESSION_PREFIX = "member:";
 
 function emailKeyOf(value) {
   return String(value || "").trim().toLowerCase();
@@ -909,44 +910,24 @@ function sha256(value) {
   return createHash("sha256").update(value).digest("hex");
 }
 
-function assertMemberStore(error, table) {
-  if (!error) return;
-  if (/does not exist|could not find the table|PGRST205|42P01/i.test(`${error.code} ${error.message}`)) {
-    throw new Error(`Member sign-in needs a one-time database update: run site-schema.sql in Supabase (missing table ${table}).`);
-  }
-  assertNoError(error, table);
+function memberSessionKey(token) {
+  return MEMBER_SESSION_PREFIX + sha256(token);
 }
 
-async function memberStoreGet(kind, id) {
-  const { table, key, fileKey } = MEMBER_STORES[kind];
-  if (!useSupabase) return readDbFromFile()[fileKey].find(row => row[key] === id) || null;
-  const { data, error } = await supabase.from(table).select("*").eq(key, id).maybeSingle();
-  assertMemberStore(error, table);
-  return data;
-}
-
-async function memberStorePut(kind, row) {
-  const { table, key, fileKey } = MEMBER_STORES[kind];
-  if (!useSupabase) {
-    const db = readDbFromFile();
-    db[fileKey] = [...db[fileKey].filter(item => item[key] !== row[key] && new Date(item.expiresAt) > new Date()), row];
-    writeDbToFile(db);
-    return;
+function ensureMemberRecord(db, email) {
+  let record = memberRecord(db, email);
+  if (!record) {
+    record = {
+      id: randomUUID(),
+      type: "member",
+      fields: { emailAddress: email },
+      shortCode: createShortCode(db),
+      status: "Member",
+      createdAt: new Date().toISOString()
+    };
+    db.submissions.push(record);
   }
-  const { error } = await supabase.from(table).upsert(row, { onConflict: key });
-  assertMemberStore(error, table);
-}
-
-async function memberStoreDelete(kind, id) {
-  const { table, key, fileKey } = MEMBER_STORES[kind];
-  if (!useSupabase) {
-    const db = readDbFromFile();
-    db[fileKey] = db[fileKey].filter(item => item[key] !== id);
-    writeDbToFile(db);
-    return;
-  }
-  const { error } = await supabase.from(table).delete().eq(key, id);
-  assertMemberStore(error, table);
+  return record;
 }
 
 function setMemberCookie(res, token) {
@@ -960,13 +941,17 @@ function clearMemberCookie(res) {
 }
 
 // Only a hash of the session token is stored, so a leaked database row
-// cannot be replayed as a cookie.
+// cannot be replayed as a cookie. Returns the database it read, for reuse.
 async function getMemberContext(req) {
   const token = parseCookies(req.headers.cookie).ha_member;
   if (!token || !/^[a-f0-9]{64}$/.test(token)) return null;
-  const session = await memberStoreGet("session", sha256(token));
+  const db = await readDb();
+  const key = memberSessionKey(token);
+  const session = db.sessions.find(item => item.token === key);
   if (!session || new Date(session.expiresAt) <= new Date()) return null;
-  return { email: session.email, tokenHash: session.tokenHash };
+  const member = db.submissions.find(record => record.id === session.adminId && record.type === "member");
+  if (!member) return null;
+  return { db, email: emailKeyOf(member.fields.emailAddress), sessionKey: key };
 }
 
 function recordsForEmail(db, email) {
@@ -1351,7 +1336,8 @@ async function handleApi(req, res, url) {
         send(res, 429, { error: "Too many sign-in attempts. Please wait a few minutes and try again." });
         return true;
       }
-      const previous = await memberStoreGet("otp", email);
+      const db = await readDb();
+      const previous = memberRecord(db, email)?.fields.signInCode;
       const now = Date.now();
       if (previous && now - new Date(previous.sentAt).getTime() < OTP_RESEND_MS) {
         send(res, 429, { error: "A code was just sent. Please wait a minute before asking for another." });
@@ -1365,7 +1351,6 @@ async function handleApi(req, res, url) {
       // The same reply whether or not the email is known, so this form can't
       // be used to find out who has given their details to the church.
       const reply = { ok: true, message: "If this email is registered with Harvesters Akure, a 6-digit code is on its way. It expires in 10 minutes." };
-      const db = await readDb();
       const known = db.submissions.some(record => emailKeyOf(emailAddress(record.fields)) === email);
       if (!known) {
         send(res, 200, reply);
@@ -1373,15 +1358,15 @@ async function handleApi(req, res, url) {
       }
       const code = String(randomInt(0, 1_000_000)).padStart(6, "0");
       await sendSignInCode(email, code);
-      await memberStorePut("otp", {
-        email,
+      ensureMemberRecord(db, email).fields.signInCode = {
         codeHash: sha256(`${email}:${code}`),
         expiresAt: new Date(now + OTP_TTL_MS).toISOString(),
         attempts: 0,
         sentAt: new Date(now).toISOString(),
         windowStart: sameWindow ? previous.windowStart : new Date(now).toISOString(),
         sendCount: sameWindow ? previous.sendCount + 1 : 1
-      });
+      };
+      await writeDb(db);
       send(res, 200, reply);
     } catch (error) {
       send(res, 400, { error: error.message });
@@ -1394,38 +1379,29 @@ async function handleApi(req, res, url) {
       const body = await parseBody(req);
       const email = emailKeyOf(cleanText(body.email));
       const code = cleanText(body.code).replace(/\D/g, "");
-      const otp = await memberStoreGet("otp", email);
+      const db = await readDb();
+      const member = memberRecord(db, email);
+      const otp = member?.fields.signInCode;
       if (!otp || new Date(otp.expiresAt) <= new Date()) throw new Error("This code has expired or was not found. Please request a new one.");
       if (otp.attempts >= OTP_MAX_ATTEMPTS) {
-        await memberStoreDelete("otp", email);
+        delete member.fields.signInCode;
+        await writeDb(db);
         throw new Error("Too many incorrect attempts. Please request a new code.");
       }
       if (!codesMatch(sha256(`${email}:${code}`), otp.codeHash)) {
-        await memberStorePut("otp", { ...otp, attempts: otp.attempts + 1 });
+        otp.attempts += 1;
+        await writeDb(db);
         throw new Error("That code is not correct. Please check the email and try again.");
       }
-      await memberStoreDelete("otp", email);
+      delete member.fields.signInCode;
+      member.fields.lastSignInAt = new Date().toISOString();
       const token = randomBytes(32).toString("hex");
-      await memberStorePut("session", {
-        tokenHash: sha256(token),
-        email,
+      db.sessions.push({
+        token: memberSessionKey(token),
+        adminId: member.id,
         createdAt: new Date().toISOString(),
         expiresAt: new Date(Date.now() + MEMBER_SESSION_TTL_MS).toISOString()
       });
-      const db = await readDb();
-      const existing = memberRecord(db, email);
-      if (existing) {
-        existing.fields.lastSignInAt = new Date().toISOString();
-      } else {
-        db.submissions.push({
-          id: randomUUID(),
-          type: "member",
-          fields: { emailAddress: email, lastSignInAt: new Date().toISOString() },
-          shortCode: createShortCode(db),
-          status: "Member",
-          createdAt: new Date().toISOString()
-        });
-      }
       await writeDb(db);
       setMemberCookie(res, token);
       send(res, 200, { profile: buildMemberProfile(db, email) });
@@ -1437,13 +1413,16 @@ async function handleApi(req, res, url) {
 
   if (url.pathname === "/api/member/me" && req.method === "GET") {
     const ctx = await getMemberContext(req).catch(() => null);
-    send(res, 200, { profile: ctx ? buildMemberProfile(await readDb(), ctx.email) : null });
+    send(res, 200, { profile: ctx ? buildMemberProfile(ctx.db, ctx.email) : null });
     return true;
   }
 
   if (url.pathname === "/api/member/logout" && req.method === "POST") {
     const ctx = await getMemberContext(req).catch(() => null);
-    if (ctx) await memberStoreDelete("session", ctx.tokenHash).catch(() => {});
+    if (ctx) {
+      ctx.db.sessions = ctx.db.sessions.filter(session => session.token !== ctx.sessionKey);
+      await writeDb(ctx.db).catch(() => {});
+    }
     clearMemberCookie(res);
     send(res, 200, { ok: true });
     return true;

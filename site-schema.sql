@@ -90,29 +90,3 @@ revoke all on public.harvesters_sessions from anon, authenticated;
 revoke all on public.harvesters_audit_log from anon, authenticated;
 revoke all on public.harvesters_launch_items from anon, authenticated;
 revoke all on public.harvesters_seed from anon, authenticated;
-
--- Member sign-in (added with the My Profile page). Members sign in with a
--- 6-digit code emailed to them. Only a hash of each code and of each
--- session token is stored. Same access model as above: server-only.
-create table if not exists public.harvesters_member_otps (
-  email text primary key,
-  "codeHash" text not null,
-  "expiresAt" timestamptz not null,
-  attempts int not null default 0,
-  "sentAt" timestamptz not null,
-  "windowStart" timestamptz not null,
-  "sendCount" int not null default 1
-);
-
-create table if not exists public.harvesters_member_sessions (
-  "tokenHash" text primary key,
-  email text not null,
-  "createdAt" timestamptz not null default now(),
-  "expiresAt" timestamptz not null
-);
-create index if not exists harvesters_member_sessions_email_idx on public.harvesters_member_sessions (email);
-
-alter table public.harvesters_member_otps enable row level security;
-alter table public.harvesters_member_sessions enable row level security;
-revoke all on public.harvesters_member_otps from anon, authenticated;
-revoke all on public.harvesters_member_sessions from anon, authenticated;

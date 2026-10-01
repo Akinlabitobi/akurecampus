@@ -357,10 +357,11 @@ function shell(content) {
         
       </a>
       <div class="navlinks ${menuOpen ? "open" : ""}">
-        ${navItems.map(([id, label]) => `<button class="${activeView === id ? "active" : ""}" data-nav="${id}">${label}</button>`).join("")}
+        ${navItems.map(([id, label]) => `<button class="${activeView === id ? "active" : ""}" data-nav="${id}" ${id === "profile" ? "data-member-label" : ""}>${id === "profile" ? memberButtonLabel() : label}</button>`).join("")}
         <button class="install-link" type="button" data-install ${isStandalone() ? "hidden" : ""}>${icon("download")} Install App</button>
       </div>
       <div class="actions">
+        <button class="btn member-btn ${activeView === "profile" ? "active" : ""}" data-nav="profile">${icon("users")} <span data-member-label>${memberButtonLabel()}</span></button>
         <button class="btn primary" data-nav="communities">Join Community</button>
         <button class="btn blue" data-nav="giving">Give</button>
         <button class="menu-toggle" aria-label="Toggle menu" data-menu>${icon("menu")}</button>
@@ -609,7 +610,9 @@ function simplePage(kind) {
     birthdays: ["Birthday Celebrations", "Share your birthday with the Harvesters Akure family so we can celebrate you.", birthdayPage()],
     gallery: ["Gallery", "A growing archive of launch, worship, outreach, and community moments.", gallerySection() + formPage("Gallery Upload or Content Idea", ["Full name", "Email address", "Subject", "Message"], "content")],
     contact: ["Contact Us", "Reach the Akure launch team and stay updated.", contactPage()],
-    profile: ["My Profile", "Sign in with your email to see and update your Harvesters Akure details.", profilePage()]
+    profile: memberProfile
+      ? ["My Profile", "Your Harvesters Akure details, communities and teams in one place.", profilePage()]
+      : ["Member Sign In", "Sign in with your email to see and update your Harvesters Akure details.", profilePage()]
   };
   const [title, subtitle, body] = pageData[kind];
   return `
@@ -1784,6 +1787,7 @@ function editableTable(headers, rows, records) {
         const record = records[index];
         const actionsCell = showActions
           ? `<td class="actions-cell">
+              ${canEdit && record.type !== "cell_report" ? `<button class="btn primary small" type="button" data-edit-submission="${record.id}">Edit</button>` : ""}
               ${canEdit ? `<span class="status-editor"><input data-status-input data-id="${record.id}" value="${record.status || ""}" /><button class="btn outline small" type="button" data-save-status="${record.id}">Save</button></span>` : ""}
               ${canDelete ? `<button class="btn danger small" type="button" data-delete-submission="${record.id}">Delete</button>` : ""}
             </td>`
@@ -1795,7 +1799,7 @@ function editableTable(headers, rows, records) {
   // .dashboard-main / .table in styles.css), but a scrollbar alone is easy
   // to miss -- this line makes "there's more to the right" impossible to
   // miss instead of relying on a thin bar admins might not notice.
-  const hint = showActions ? `<p class="table-scroll-hint">Scroll right to edit status or delete &rarr;</p>` : "";
+  const hint = showActions ? `<p class="table-scroll-hint">Scroll right to edit, change status or delete &rarr;</p>` : "";
   return `${hint}<div class="table"><table><thead><tr>${head.map(h => `<th>${h}</th>`).join("")}</tr></thead><tbody>${body}</tbody></table></div>`;
 }
 
@@ -2141,6 +2145,7 @@ function render() {
         : result.googleSheet?.synced
         ? `Saved and sent to the team. Short code: ${result.record.shortCode || recordCode(result.record)}.`
         : `Saved. Short code: ${result.record.shortCode || recordCode(result.record)}.`;
+      if (!result.queued) welcomeAfterSubmit(form, form.dataset.formType, fields, result.record);
     } catch (error) {
       note.className = "form-note error";
       note.textContent = error.message;
@@ -2361,6 +2366,10 @@ function render() {
     const id = button.dataset.saveStatus;
     const input = document.querySelector(`[data-status-input][data-id="${id}"]`);
     updateSubmission(id, { status: input.value });
+  }));
+  document.querySelectorAll("[data-edit-submission]").forEach(button => button.addEventListener("click", () => {
+    const record = dashboardData?.submissions?.find(item => item.id === button.dataset.editSubmission);
+    if (record) showSubmissionEditor(record);
   }));
   document.querySelectorAll("[data-delete-submission]").forEach(button => button.addEventListener("click", () => {
     deleteSubmission(button.dataset.deleteSubmission);
@@ -2616,6 +2625,7 @@ async function saveBirthday(form) {
       : result.updated
       ? `Thanks, ${firstName}! Your birthday details have been updated.`
       : `Thank you, ${firstName}! We look forward to celebrating you on ${birthdayLabel(fields.dateOfBirth)}.`;
+    if (!result.queued) showWelcome("birthday", fields, result.record);
   } catch (error) {
     showError(error.message);
   } finally {
@@ -2650,7 +2660,18 @@ async function loadMemberProfile() {
   } finally {
     memberChecking = false;
     if (activeView === "profile") render();
+    else updateMemberButtons();
   }
+}
+
+function memberButtonLabel() {
+  return memberProfile ? "My Profile" : "Sign In";
+}
+
+function updateMemberButtons() {
+  document.querySelectorAll("[data-member-label]").forEach(element => {
+    element.textContent = memberButtonLabel();
+  });
 }
 
 async function requestMemberCode() {
@@ -2877,6 +2898,189 @@ function closeMenuIfOpen() {
   document.querySelector(".navlinks")?.classList.remove("open");
 }
 
+// ---- Pop-up dialogs (welcome, submission editor) ----
+
+// Appends a dialog to <body> (outside the re-rendered app) and returns a
+// function that closes it. Clicking the dim backdrop or any [data-close]
+// element closes it too.
+function openDialog(innerHtml, className = "") {
+  const modal = document.createElement("div");
+  modal.className = "form-modal";
+  modal.innerHTML = `
+    <div class="form-modal-panel ${className}" role="dialog" aria-modal="true">
+      <button class="form-modal-close" type="button" aria-label="Close" data-close>&times;</button>
+      ${innerHtml}
+    </div>
+  `;
+  const close = () => {
+    modal.remove();
+    document.body.classList.remove("modal-open");
+  };
+  modal.addEventListener("click", event => {
+    if (event.target === modal || event.target.closest("[data-close]")) close();
+  });
+  document.body.appendChild(modal);
+  document.body.classList.add("modal-open");
+  return { modal, close };
+}
+
+// What to say after each kind of form. Community and workforce signups are
+// welcomed into the specific group they chose.
+function welcomeContent(type, fields) {
+  const firstName = String(fields.fullName || fields.name || "").trim().split(/\s+/)[0];
+  const hello = firstName ? `${firstName}, welcome` : "Welcome";
+  if (type === "community") {
+    const group = fields.preferredCommunity || "the community";
+    const description = communities.find(([name]) => name === group)?.[1] || "";
+    const isCell = /cell$/i.test(group);
+    return {
+      icon: "users",
+      title: `${hello} to ${group}!`,
+      message: `${description} ${isCell
+        ? "Your cell leader will reach out with details of your next cell meeting."
+        : "Someone from the group will reach out soon about how to get involved."}`,
+      extra: "We're so glad you're part of the Harvesters Akure family."
+    };
+  }
+  if (type === "workforce") {
+    const team = fields.department || "Workforce";
+    return {
+      icon: "briefcase",
+      title: `${hello} to the ${team} team!`,
+      message: `Thank you for choosing to serve. The ${team} team lead will contact you about training and next steps.`,
+      extra: "Together we're building something powerful in Akure."
+    };
+  }
+  if (type === "birthday") {
+    return {
+      icon: "cake",
+      title: `${hello} to our birthday family!`,
+      message: `We'll celebrate you on ${birthdayLabel(fields.dateOfBirth)}. Look out for your birthday shout-out!`,
+      extra: "Every year of your life is a reason to give thanks."
+    };
+  }
+  return {
+    counselling: { icon: "heart", title: "We've received your request", message: "A member of our pastoral team will reach out to you at your preferred time. You are not alone, and we're here for you.", extra: "" },
+    partnership: { icon: "heart", title: "Thank you for partnering with us!", message: "Our partnership team will contact you about how we can work together for the Akure launch.", extra: "Your support makes a real difference." },
+    giving: { icon: "heart", title: "Thank you for your generosity!", message: "Your pledge has been recorded. The finance team may reach out to confirm the details.", extra: "God loves a cheerful giver." },
+    nlp: { icon: "calendar", title: `${hello} to Next Level Prayers!`, message: "You'll receive prayer updates and reminders. Join us daily at 6:30 AM.", extra: "" },
+    contact: { icon: "mail", title: "Message received", message: "Thank you for reaching out. Someone from the Harvesters Akure team will get back to you shortly.", extra: "" },
+    content: { icon: "check", title: "Thank you for sharing!", message: "The media team will review your content idea or upload.", extra: "" }
+  }[type] || { icon: "check", title: "Thank you!", message: "Your details have been saved.", extra: "" };
+}
+
+function showWelcome(type, fields, record) {
+  const content = welcomeContent(type, fields);
+  const code = record ? record.shortCode || recordCode(record) : "";
+  const email = fields.emailAddress || fields.email || "";
+  const offerProfile = email && !memberProfile;
+  const { modal, close } = openDialog(`
+    <div class="welcome-card">
+      <span class="welcome-icon">${icon(content.icon)}</span>
+      <h3>${escapeHtml(content.title)}</h3>
+      <p>${escapeHtml(content.message)}</p>
+      ${content.extra ? `<p class="muted">${escapeHtml(content.extra)}</p>` : ""}
+      ${code ? `<p class="welcome-code">Your reference: <strong>${escapeHtml(code)}</strong></p>` : ""}
+      <div class="welcome-actions">
+        <button class="btn primary" type="button" data-close>Done</button>
+        ${offerProfile ? `<button class="btn outline" type="button" data-welcome-profile>See my profile</button>` : ""}
+      </div>
+    </div>
+  `, "welcome-panel");
+  modal.querySelector("[data-welcome-profile]")?.addEventListener("click", () => {
+    close();
+    memberEmail = email;
+    memberStep = "email";
+    navigate("profile");
+  });
+}
+
+function welcomeAfterSubmit(form, type, fields, record) {
+  if (type === "newsletter") {
+    toast("You're subscribed! Launch updates will come to your inbox.", "success");
+    return;
+  }
+  // Signups made inside the community/department pop-up: close it first.
+  if (form.closest(".form-modal") && selectedChoice[type] !== undefined) {
+    selectedChoice[type] = "";
+    render();
+  }
+  showWelcome(type, fields, record);
+}
+
+// Admin editor for any submitted form. Shows every text field on the record
+// (photos, sign-in data and cell-report lists are edited elsewhere).
+const NON_EDITABLE_FIELDS = ["name", "photoPath", "photoType", "photoConsent", "communicationsConsent", "signInCode", "lastSignInAt", "present", "absent", "visitors"];
+
+function fieldLabel(key) {
+  const text = key.replace(/([A-Z])/g, " $1").toLowerCase().trim();
+  return text.charAt(0).toUpperCase() + text.slice(1);
+}
+
+function editorInput(key, value) {
+  const name = `field:${key}`;
+  const safe = escapeHtml(value);
+  const select = (options, current) => {
+    const list = options.includes(current) || !current ? options : [current, ...options];
+    return `<select name="${name}"><option value="">-</option>${list.map(option => `<option value="${escapeHtml(option)}" ${option === current ? "selected" : ""}>${escapeHtml(option)}</option>`).join("")}</select>`;
+  };
+  if (key === "preferredCommunity") return select(communities.map(([group]) => group), value);
+  if (key === "department") return select(departments, value);
+  if (key === "wouldYouLikeToLead") return select(["Yes", "No"], value);
+  if (/date$|^dateOf/i.test(key) && /^\d{4}-\d{2}-\d{2}$/.test(value)) return `<input type="date" name="${name}" value="${safe}" />`;
+  if (/message|notes?|experience|description/i.test(key) || String(value).length > 70) return `<textarea name="${name}" rows="3">${safe}</textarea>`;
+  return `<input name="${name}" value="${safe}" />`;
+}
+
+function showSubmissionEditor(record) {
+  const entries = Object.entries(record.fields).filter(([key, value]) => !NON_EDITABLE_FIELDS.includes(key) && (typeof value === "string" || typeof value === "number"));
+  const { modal, close } = openDialog(`
+    <form class="form submission-editor" data-submission-editor>
+      <h3>Edit ${escapeHtml(SUBMISSION_LABELS[record.type] || record.type)} &middot; ${escapeHtml(recordCode(record))}</h3>
+      ${entries.map(([key, value]) => `<label><span>${escapeHtml(fieldLabel(key))}</span>${editorInput(key, String(value))}</label>`).join("")}
+      <label><span>Status</span><input name="status" value="${escapeHtml(record.status || "")}" /></label>
+      <div class="inline-actions">
+        <button class="btn primary" type="submit">Save Changes</button>
+        <button class="btn ghost-dark" type="button" data-close>Cancel</button>
+      </div>
+      <p class="form-note"></p>
+    </form>
+  `, "editor-panel");
+  const form = modal.querySelector("form");
+  form.addEventListener("submit", async event => {
+    event.preventDefault();
+    const data = new FormData(form);
+    const fields = {};
+    for (const [key, value] of data.entries()) {
+      if (key.startsWith("field:")) fields[key.slice(6)] = String(value).trim();
+    }
+    // Some records keep a copy of the name in "name"; keep it in step.
+    if ("fullName" in fields && "name" in record.fields) fields.name = fields.fullName;
+    const note = form.querySelector(".form-note");
+    const button = form.querySelector("button[type=submit]");
+    button.disabled = true;
+    note.className = "form-note";
+    note.textContent = "Saving...";
+    try {
+      const response = await fetch(`/api/admin/submissions/${record.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status: String(data.get("status") || ""), fields })
+      });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(result.error || "Could not save these changes.");
+      dashboardData = result.dashboard;
+      close();
+      toast("Changes saved.", "success");
+      render();
+    } catch (error) {
+      note.className = "form-note error";
+      note.textContent = error.message;
+      button.disabled = false;
+    }
+  });
+}
+
 function showInstallSteps() {
   const steps = INSTALL_STEPS[installPlatform()];
   const modal = document.createElement("div");
@@ -3002,3 +3206,4 @@ if ("serviceWorker" in navigator && import.meta.env.PROD) {
 
 render();
 sendSavedForms();
+if (memberProfile === undefined) loadMemberProfile();

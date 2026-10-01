@@ -2900,3 +2900,104 @@ body.modal-open {
 .cell-picker label small {
   font-weight: 600;
 }
+
+/* Member "Sign In" / "My Profile" button in the top bar. Stays visible on
+   small screens, where the other header buttons move into the menu. */
+.actions .btn.member-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--navy);
+  background: var(--soft);
+  border: 1px solid var(--line);
+}
+
+.actions .btn.member-btn.active,
+.actions .btn.member-btn:hover {
+  color: var(--red);
+  border-color: var(--red);
+}
+
+.actions .btn.member-btn .icon {
+  width: 18px;
+  height: 18px;
+}
+
+@media (max-width: 460px) {
+  .actions .btn.member-btn {
+    padding: 0 12px;
+    min-height: 42px;
+    font-size: 0.85rem;
+  }
+}
+
+/* Welcome pop-up shown after a form is sent. */
+.welcome-panel {
+  width: min(460px, 100%);
+}
+
+.welcome-card {
+  display: grid;
+  justify-items: center;
+  gap: 12px;
+  padding: 40px 28px 28px;
+  text-align: center;
+  background: var(--white);
+  border-radius: 8px;
+  box-shadow: 0 30px 80px rgba(7, 30, 61, 0.35);
+}
+
+.welcome-icon {
+  width: 72px;
+  height: 72px;
+  display: grid;
+  place-items: center;
+  color: var(--white);
+  background: var(--red);
+  border-radius: 50%;
+}
+
+.welcome-icon .icon {
+  width: 34px;
+  height: 34px;
+}
+
+.welcome-card h3 {
+  margin: 6px 0 0;
+  font-size: 1.45rem;
+}
+
+.welcome-card p {
+  margin: 0;
+  line-height: 1.6;
+}
+
+.welcome-code {
+  padding: 8px 14px;
+  color: var(--navy);
+  background: var(--soft);
+  border-radius: 8px;
+  font-size: 0.9rem;
+}
+
+.welcome-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 10px;
+  margin-top: 6px;
+}
+
+/* Admin editor for submitted forms. */
+.editor-panel {
+  width: min(620px, 100%);
+}
+
+.submission-editor {
+  padding-top: 40px;
+  box-shadow: 0 30px 80px rgba(7, 30, 61, 0.35);
+}
+
+.submission-editor h3 {
+  margin: 0;
+}
