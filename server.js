@@ -324,7 +324,48 @@ async function writeDbToSupabase(db) {
 // ---- Persistence dispatch ----------------------------------------------
 
 async function readDb() {
-  return useSupabase ? readDbFromSupabase() : readDbFromFile();
+  const db = useSupabase ? await readDbFromSupabase() : readDbFromFile();
+  if (applyAdminRecovery(db)) await writeDb(db);
+  return db;
+}
+
+// Account recovery for when nobody can sign in. Set ADMIN_RECOVERY_EMAIL
+// and ADMIN_RECOVERY_PASSWORD (8+ characters) on the server and redeploy:
+// on the next request that email becomes an active superadmin with that
+// password (created if it doesn't exist), and must choose a new password
+// after signing in. It runs once per email+password pair -- an audit-log
+// entry records it -- so changing the password afterwards sticks. Remove
+// both variables once you're back in.
+function applyAdminRecovery(db) {
+  const email = String(process.env.ADMIN_RECOVERY_EMAIL || "").trim().toLowerCase();
+  const password = String(process.env.ADMIN_RECOVERY_PASSWORD || "");
+  if (!email || password.length < 8) return false;
+  const marker = `recovery:${sha256(`${email}:${password}`).slice(0, 16)}`;
+  if (db.auditLog.some(entry => entry.detail === marker)) return false;
+  let admin = db.admins.find(item => String(item.email).trim().toLowerCase() === email);
+  if (!admin) {
+    admin = { id: randomUUID(), name: "Administrator", createdAt: new Date().toISOString(), lastLoginAt: null };
+    db.admins.push(admin);
+  }
+  Object.assign(admin, {
+    email,
+    passwordHash: hashPassword(password),
+    role: "superadmin",
+    permissions: ALL_PERMISSIONS.slice(),
+    active: true,
+    mustChangePassword: true
+  });
+  db.sessions = db.sessions.filter(session => session.adminId !== admin.id);
+  db.auditLog.unshift({
+    id: randomUUID(),
+    adminId: admin.id,
+    adminName: "Account recovery",
+    action: `Recovered admin account ${email}`,
+    detail: marker,
+    createdAt: new Date().toISOString()
+  });
+  console.log(`Admin account recovery applied for ${email}.`);
+  return true;
 }
 
 async function writeDb(db) {
