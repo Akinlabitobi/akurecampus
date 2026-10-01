@@ -751,8 +751,9 @@ function sameCelebrant(record, fields) {
 //
 // A cell's members are everyone who joined it through the Communities page
 // (community records whose preferredCommunity is that cell). A cell report
-// is one meeting: who was present or absent, visitors, topic, offering and
-// notes -- one report per cell per date, re-saving the same date edits it.
+// is one week's meeting: who was present or absent, visitors, topic,
+// offering and notes. Cells meet weekly, so there is one report per cell per
+// week (Monday to Sunday); saving any date in that week edits it.
 //
 // Cell leaders only ever reach their own cells' members and reports through
 // these routes; they have no view_dashboard permission, so every other admin
@@ -806,13 +807,20 @@ function cellOverview(db, ctx) {
   const reports = db.submissions
     .filter(record => record.type === "cell_report" && ctx.cells.some(cell => sameCellName(cell, record.fields.cell)))
     .sort((a, b) => String(b.fields.meetingDate).localeCompare(String(a.fields.meetingDate)) || new Date(b.createdAt) - new Date(a.createdAt))
-    .map(record => ({ id: record.id, createdAt: record.createdAt, updatedAt: record.updatedAt, ...record.fields }));
+    .map(record => ({ id: record.id, createdAt: record.createdAt, updatedAt: record.updatedAt, ...record.fields, week: weekOf(record.fields.meetingDate) }));
   return {
     cells: ctx.cells,
     seesAll: ctx.seesAll,
     members: Object.fromEntries(ctx.cells.map(cell => [cell, cellMembers(db, cell)])),
     reports
   };
+}
+
+// The Monday (YYYY-MM-DD) of the week a date falls in.
+function weekOf(dateKey) {
+  const date = new Date(`${dateKey}T00:00:00Z`);
+  date.setUTCDate(date.getUTCDate() - ((date.getUTCDay() + 6) % 7));
+  return date.toISOString().slice(0, 10);
 }
 
 function idList(value, allowed) {
@@ -1508,6 +1516,7 @@ async function handleApi(req, res, url) {
       const fields = {
         cell,
         meetingDate,
+        week: weekOf(meetingDate),
         held,
         topic: cleanText(body.topic).slice(0, 200),
         notes: cleanText(body.notes),
@@ -1521,8 +1530,8 @@ async function handleApi(req, res, url) {
         leaderId: leader.id,
         leaderName: leader.name
       };
-      // One report per cell per date: re-sending the same date edits it.
-      const existing = db.submissions.find(record => record.type === "cell_report" && sameCellName(record.fields.cell, cell) && record.fields.meetingDate === meetingDate);
+      // One report per cell per week: any date in the same week edits it.
+      const existing = db.submissions.find(record => record.type === "cell_report" && sameCellName(record.fields.cell, cell) && weekOf(record.fields.meetingDate) === fields.week);
       if (existing) {
         existing.fields = fields;
         existing.updatedAt = new Date().toISOString();

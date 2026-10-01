@@ -1380,6 +1380,34 @@ function sameCell(a, b) {
   return String(a || "").trim().toLowerCase() === String(b || "").trim().toLowerCase();
 }
 
+// Cells meet weekly: a week runs Monday to Sunday and is named by its Monday.
+function weekOf(dateKey) {
+  const date = new Date(`${dateKey}T00:00:00`);
+  date.setDate(date.getDate() - ((date.getDay() + 6) % 7));
+  return localDateKey(date);
+}
+
+function weekLabel(week) {
+  const start = new Date(`${week}T00:00:00`);
+  const end = new Date(start);
+  end.setDate(end.getDate() + 6);
+  const day = date => date.toLocaleDateString("en-GB", { day: "numeric", month: "short" });
+  return `${day(start)} – ${day(end)} ${end.getFullYear()}`;
+}
+
+// A week belongs to the month holding most of its days (its Thursday), so a
+// week spanning two months is only counted once.
+function monthOfWeek(week) {
+  const thursday = new Date(`${week}T00:00:00`);
+  thursday.setDate(thursday.getDate() + 3);
+  return localDateKey(thursday).slice(0, 7);
+}
+
+function monthName(month) {
+  const [year, index] = month.split("-").map(Number);
+  return `${MONTHS[index - 1]} ${year}`;
+}
+
 function cellReportsFor(cell) {
   return (cellData?.reports || []).filter(report => sameCell(report.cell, cell));
 }
@@ -1444,14 +1472,16 @@ function cellAttendanceTab() {
             ${cells.map(cell => `<option value="${escapeHtml(cell)}" ${sameCell(cell, cellChoice) ? "selected" : ""}>${escapeHtml(cell)} (${(members[cell] || []).length})</option>`).join("")}
           </select>
         </label>` : `<div><span class="label">Your cell</span><h3>${escapeHtml(cellChoice)}</h3></div>`}
-      <label><span>Meeting date</span><input type="date" data-cell-date value="${cellDate}" max="${localDateKey(new Date())}" /></label>
+      <label><span>Meeting date</span><input type="date" data-cell-date value="${cellDate}" max="${localDateKey(new Date())}" /><small class="muted">Week of ${weekLabel(weekOf(cellDate))}</small></label>
     </div>
   `;
   if (!cellChoice) return `${picker}<div class="panel"><p class="muted">Choose a cell to take attendance.</p></div>`;
 
   const roster = members[cellChoice] || [];
-  const existing = cellReportsFor(cellChoice).find(report => report.meetingDate === cellDate);
-  const draftKey = `${cellChoice}|${cellDate}`;
+  // One report per cell per week: picking any day of a reported week opens
+  // that week's report for editing.
+  const existing = cellReportsFor(cellChoice).find(report => report.week === weekOf(cellDate));
+  const draftKey = `${cellChoice}|${weekOf(cellDate)}`;
   if (cellDraft?.key !== draftKey) {
     cellDraft = existing
       ? { key: draftKey, held: existing.held, present: new Set(existing.present), topic: existing.topic, notes: existing.notes, offering: existing.offering ? String(existing.offering) : "", visitors: existing.visitors.map(visitor => ({ ...visitor, addToCell: false })) }
@@ -1472,7 +1502,7 @@ function cellAttendanceTab() {
   }).join("");
   return `
     ${picker}
-    ${existing ? `<p class="form-note">A report for this date was already sent${existing.leaderName ? ` by ${escapeHtml(existing.leaderName)}` : ""}. Saving again will update it.</p>` : ""}
+    ${existing ? `<p class="form-note">This week's report was already sent${existing.leaderName ? ` by ${escapeHtml(existing.leaderName)}` : ""} (meeting on ${formatDate(existing.meetingDate)}). Saving again updates it${existing.meetingDate !== cellDate ? ` and changes the meeting date to ${formatDate(cellDate)}` : ""}.</p>` : ""}
     <form class="form cell-report-form" data-cell-report-form>
       <fieldset class="held-toggle">
         <legend>Did the meeting hold?</legend>
@@ -1515,26 +1545,40 @@ function cellReportsTab() {
   if (report) return cellReportDetail(report, members[report.cell] || []);
   cellReportView = "";
 
-  const month = localDateKey(new Date()).slice(0, 7);
-  const thisMonth = reports.filter(item => item.meetingDate.startsWith(month));
-  const heldThisMonth = thisMonth.filter(item => item.held === "yes" && item.memberCount);
-  const presentSum = heldThisMonth.reduce((sum, item) => sum + item.presentCount, 0);
-  const memberSum = heldThisMonth.reduce((sum, item) => sum + item.memberCount, 0);
-  const average = memberSum ? Math.round((presentSum / memberSum) * 100) : null;
-  const visitors = thisMonth.reduce((sum, item) => sum + item.visitorCount, 0);
   const needFollowUp = followUps(scope);
-  const rows = reports.map(item => {
-    const rate = item.held === "yes" && item.memberCount ? ` (${Math.round((item.presentCount / item.memberCount) * 100)}%)` : "";
-    return [
-      formatDate(item.meetingDate),
-      escapeHtml(item.cell),
-      escapeHtml(item.leaderName || "-"),
-      item.held === "yes" ? `${item.presentCount} / ${item.memberCount}${rate}` : `<span class="tag">Didn't hold</span>`,
-      String(item.visitorCount || 0),
-      item.offering ? money(item.offering) : "-",
-      `<button class="btn outline small" type="button" data-view-report="${item.id}">View</button>`
-    ];
-  });
+  const weeks = weeklyTotals(reports, scope);
+  const months = monthlyAverages(weeks);
+  const thisWeek = weeks.find(week => week.week === weekOf(localDateKey(new Date())));
+  const thisMonth = months.find(month => month.month === localDateKey(new Date()).slice(0, 7));
+  const rate = (present, possible) => possible ? `${Math.round((present / possible) * 100)}%` : "-";
+  const weekRows = weeks.slice(0, 12).map(week => [
+    `<strong>${weekLabel(week.week)}</strong>`,
+    `${week.cellsReported} of ${week.activeCells}`,
+    String(week.present),
+    String(week.possible),
+    rate(week.present, week.possible),
+    String(week.visitors),
+    week.offering ? money(week.offering) : "-"
+  ]);
+  const monthRows = months.slice(0, 12).map(month => [
+    `<strong>${monthName(month.month)}</strong>`,
+    String(month.weeks),
+    `<strong>${Math.round(month.averagePresent)}</strong> people`,
+    rate(month.present, month.possible),
+    String(month.visitors),
+    month.offering ? money(month.offering) : "-"
+  ]);
+  const reportRows = reports.map(item => [
+    formatDate(item.meetingDate),
+    escapeHtml(item.cell),
+    escapeHtml(item.leaderName || "-"),
+    item.held === "yes" ? `${item.presentCount} / ${item.memberCount} (${rate(item.presentCount, item.memberCount)})` : `<span class="tag">Didn't hold</span>`,
+    String(item.visitorCount || 0),
+    item.offering ? money(item.offering) : "-",
+    `<button class="btn outline small" type="button" data-view-report="${item.id}">View</button>`
+  ]);
+  const scopeLabel = scope.length === 1 ? escapeHtml(scope[0]) : "all cells";
+  const monthLabel = MONTHS[new Date().getMonth()];
   return `
     <div class="panel cell-picker">
       ${cells.length > 1 ? `
@@ -1547,9 +1591,9 @@ function cellReportsTab() {
       <button class="btn outline" type="button" data-cell-csv ${reports.length ? "" : "disabled"}>Download CSV</button>
     </div>
     <div class="metric-grid">
-      <article class="metric large"><span>Reports This Month</span><strong>${thisMonth.length}</strong><small>${MONTHS[new Date().getMonth()]}</small></article>
-      <article class="metric large"><span>Average Attendance</span><strong>${average === null ? "-" : `${average}%`}</strong><small>meetings held this month</small></article>
-      <article class="metric large"><span>Visitors</span><strong>${visitors}</strong><small>this month</small></article>
+      <article class="metric large"><span>This Week</span><strong>${thisWeek ? thisWeek.present : 0}</strong><small>${thisWeek ? `present across ${thisWeek.cellsReported} of ${thisWeek.activeCells} cells` : "no reports yet this week"}</small></article>
+      <article class="metric large"><span>Monthly Average</span><strong>${thisMonth ? Math.round(thisMonth.averagePresent) : "-"}</strong><small>${thisMonth ? `people a week in ${monthLabel} (${rate(thisMonth.present, thisMonth.possible)})` : `no reports in ${monthLabel} yet`}</small></article>
+      <article class="metric large"><span>Visitors</span><strong>${thisMonth ? thisMonth.visitors : 0}</strong><small>this month</small></article>
       <article class="metric large"><span>Need Follow-Up</span><strong>${needFollowUp.length}</strong><small>missed 3+ meetings in a row</small></article>
     </div>
     ${needFollowUp.length ? `
@@ -1566,8 +1610,60 @@ function cellReportsTab() {
         </div>
       </div>
     ` : ""}
-    <div class="table section-table">${table(["Date", "Cell", "Leader", "Attendance", "Visitors", "Offering", ""], rows)}</div>
+    <div class="panel report-section">
+      <h3>Weekly Attendance</h3>
+      <p class="muted">Every cell's attendance added up for each week (Monday to Sunday), for ${scopeLabel}.</p>
+      <div class="table">${table(["Week", "Cells Reported", "Present", "Members", "Attendance", "Visitors", "Offering"], weekRows)}</div>
+    </div>
+    <div class="panel report-section">
+      <h3>Monthly Average</h3>
+      <p class="muted">Average weekly attendance for each month: that month's weekly totals added up, divided by the number of weeks reported.</p>
+      <div class="table">${table(["Month", "Weeks", "Avg. Weekly Attendance", "Attendance Rate", "Visitors", "Offering"], monthRows)}</div>
+    </div>
+    <div class="panel report-section">
+      <h3>All Reports</h3>
+      <div class="table">${table(["Date", "Cell", "Leader", "Attendance", "Visitors", "Offering", ""], reportRows)}</div>
+    </div>
   `;
+}
+
+// Adds up every cell's report for each week. "activeCells" is how many of
+// the cells in view could have reported (they have members or have reported
+// before), so "3 of 8" shows at a glance which cells are missing.
+function weeklyTotals(reports, scope) {
+  const activeCells = scope.filter(cell => (cellData.members[cell] || []).length || cellReportsFor(cell).length).length;
+  const byWeek = new Map();
+  for (const report of reports) {
+    const week = byWeek.get(report.week) || { week: report.week, cellsReported: 0, present: 0, possible: 0, visitors: 0, offering: 0 };
+    week.cellsReported += 1;
+    if (report.held === "yes") {
+      week.present += report.presentCount;
+      week.possible += report.memberCount;
+    }
+    week.visitors += report.visitorCount || 0;
+    week.offering += report.offering || 0;
+    byWeek.set(report.week, week);
+  }
+  return [...byWeek.values()]
+    .map(week => ({ ...week, activeCells: Math.max(activeCells, week.cellsReported) }))
+    .sort((a, b) => b.week.localeCompare(a.week));
+}
+
+function monthlyAverages(weeks) {
+  const byMonth = new Map();
+  for (const week of weeks) {
+    const key = monthOfWeek(week.week);
+    const month = byMonth.get(key) || { month: key, weeks: 0, present: 0, possible: 0, visitors: 0, offering: 0 };
+    month.weeks += 1;
+    month.present += week.present;
+    month.possible += week.possible;
+    month.visitors += week.visitors;
+    month.offering += week.offering;
+    byMonth.set(key, month);
+  }
+  return [...byMonth.values()]
+    .map(month => ({ ...month, averagePresent: month.present / month.weeks }))
+    .sort((a, b) => b.month.localeCompare(a.month));
 }
 
 function cellReportDetail(report, roster) {
@@ -1612,9 +1708,9 @@ function downloadCellReportsCsv() {
   const reports = cellData.reports.filter(report => scope.some(cell => sameCell(cell, report.cell)));
   const nameOf = (cell, id) => (members[cell] || []).find(member => member.id === id)?.name || "(removed)";
   const cell = value => `"${String(value ?? "").replaceAll('"', '""')}"`;
-  const headers = ["Date", "Cell", "Leader", "Held", "Present", "Members", "Attendance %", "Visitors", "Offering", "Topic", "Notes", "Present names", "Absent names", "Visitor names"];
+  const headers = ["Week", "Date", "Cell", "Leader", "Held", "Present", "Members", "Attendance %", "Visitors", "Offering", "Topic", "Notes", "Present names", "Absent names", "Visitor names"];
   const rows = reports.map(report => [
-    report.meetingDate, report.cell, report.leaderName, report.held, report.presentCount, report.memberCount,
+    weekLabel(report.week), report.meetingDate, report.cell, report.leaderName, report.held, report.presentCount, report.memberCount,
     report.held === "yes" && report.memberCount ? Math.round((report.presentCount / report.memberCount) * 100) : "",
     report.visitorCount, report.offering || "", report.topic, report.notes,
     report.present.map(id => nameOf(report.cell, id)).join("; "),

@@ -2888,3 +2888,15 @@ body.modal-open {
 .permission-grid[hidden] {
   display: none;
 }
+
+.report-section h3 {
+  margin-top: 0;
+}
+
+.report-section .table {
+  margin-top: 12px;
+}
+
+.cell-picker label small {
+  font-weight: 600;
+}
