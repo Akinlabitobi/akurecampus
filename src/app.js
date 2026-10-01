@@ -1,5 +1,6 @@
 import * as THREE from "three";
 import { externalLinks, contactInfo, socialLinks } from "./config.js";
+import { SHARE_PAGES } from "./share-meta.js";
 
 const navItems = [
   ["home", "Home"],
@@ -17,21 +18,32 @@ const navItems = [
   ["profile", "My Profile"]
 ];
 
-// Deep-linkable views, via a URL hash (e.g. #admin) rather than a real path
-// -- the hash never reaches the server, so it works identically in dev and
-// production with no CDN/routing configuration needed. "admin" is the
-// friendly public name for the "dashboard" view.
-const HASH_ALIASES = { admin: "dashboard" };
+// Every view has a real path (/birthdays, /admin...) so that a shared link
+// gets that page's own WhatsApp/Facebook preview: vite.config.js writes a
+// dist/<path>/index.html per view carrying its tags (see src/share-meta.js).
+// Old "#birthdays"-style links still work and are rewritten to the path.
+// "admin" is the friendly public name for the "dashboard" view.
+const PATH_ALIASES = { admin: "dashboard" };
 const VALID_VIEWS = [...navItems.map(([id]) => id), "dashboard"];
 
-function viewFromHash() {
-  const raw = window.location.hash.replace(/^#/, "");
-  const view = HASH_ALIASES[raw] || raw;
-  return VALID_VIEWS.includes(view) ? view : "home";
+function viewFromLocation() {
+  const pick = raw => {
+    const view = PATH_ALIASES[raw] || raw;
+    return VALID_VIEWS.includes(view) ? view : "";
+  };
+  return pick(window.location.pathname.replace(/^\/+|\/+$/g, "")) || pick(window.location.hash.replace(/^#/, "")) || "home";
 }
 
-function hashForView(view) {
-  return view === "dashboard" ? "admin" : view;
+function pathForView(view) {
+  return SHARE_PAGES[view]?.path || `/${view}`;
+}
+
+function syncLocation(view, replace = false) {
+  const path = pathForView(view);
+  if (window.location.pathname !== path || window.location.hash) {
+    history[replace ? "replaceState" : "pushState"](null, "", path + window.location.search);
+  }
+  document.title = SHARE_PAGES[view]?.title || SHARE_PAGES.home.title;
 }
 
 const stats = [
@@ -112,7 +124,8 @@ const PERMISSION_LABELS = {
 };
 
 const app = document.querySelector("#app");
-let activeView = viewFromHash();
+let activeView = viewFromLocation();
+syncLocation(activeView, true);
 let menuOpen = false;
 let activeDashboard = "overview";
 let dashboardData = null;
@@ -184,18 +197,12 @@ function navigate(view, options = {}) {
   activeView = view;
   menuOpen = false;
   window.scrollTo({ top: 0, behavior: "smooth" });
-  if (!options.skipHash) {
-    const hash = hashForView(view);
-    if ((window.location.hash.replace(/^#/, "") || "") !== hash) {
-      window.location.hash = hash === "home" ? "" : hash;
-    }
-  }
+  syncLocation(view, options.fromHistory);
   render();
 }
 
-window.addEventListener("hashchange", () => {
-  navigate(viewFromHash(), { skipHash: true });
-});
+window.addEventListener("popstate", () => navigate(viewFromLocation(), { fromHistory: true }));
+window.addEventListener("hashchange", () => navigate(viewFromLocation(), { fromHistory: true }));
 
 async function loadDashboard(force = false) {
   if (dashboardLoading || (dashboardData && !force)) return;
@@ -334,7 +341,7 @@ function sortByFields(records, getters) {
 function shell(content) {
   return `
     <nav class="topbar">
-      <a class="brand" href="#" data-nav="home" aria-label="Harvesters Akure home">
+      <a class="brand" href="/" data-nav="home" aria-label="Harvesters Akure home">
         <img src="/logo-black.png" alt="Harvesters Akure" />
         
       </a>
@@ -437,7 +444,7 @@ function homeIntro() {
           <article>l
             <strong>${title}</strong>
             <p>${text}</p>
-            <a class="intro-link" href="#${view}" data-nav="${view}">${cta} ${icon("arrow")}</a>
+            <a class="intro-link" href="${pathForView(view)}" data-nav="${view}">${cta} ${icon("arrow")}</a>
           </article>
         `).join("")}
       </div>
@@ -810,7 +817,7 @@ function memberSignIn() {
             <div><strong>2</strong><span>Type in the code we email you</span></div>
             <div><strong>3</strong><span>View and update your profile</span></div>
           </div>
-          <p class="muted">New here? <a href="#communities" data-nav="communities">Join a community</a> or <a href="#birthdays" data-nav="birthdays">send your birthday</a> with your email address first, then come back to sign in.</p>
+          <p class="muted">New here? <a href="/communities" data-nav="communities">Join a community</a> or <a href="/birthdays" data-nav="birthdays">send your birthday</a> with your email address first, then come back to sign in.</p>
         </div>
         ${form}
       </div>

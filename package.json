@@ -9,7 +9,8 @@
     "api": "node --env-file-if-exists=.env server.js",
     "dev": "vite --host 127.0.0.1",
     "build": "vite build",
-    "preview": "vite preview --host 127.0.0.1"
+    "preview": "vite preview --host 127.0.0.1",
+    "share-images": "node scripts/generate-share-images.mjs"
   },
   "devDependencies": {
     "playwright": "^1.62.1",
