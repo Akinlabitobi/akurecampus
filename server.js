@@ -1,5 +1,5 @@
 import { createServer } from "node:http";
-import { randomUUID, randomBytes, scryptSync, timingSafeEqual } from "node:crypto";
+import { randomUUID, randomBytes, randomInt, scryptSync, timingSafeEqual, createHash } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync, statSync, unlinkSync } from "node:fs";
 import { extname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -19,6 +19,13 @@ const termiiChannel = process.env.TERMII_SMS_CHANNEL || "generic";
 const termiiEmailConfigurationId = process.env.TERMII_EMAIL_CONFIGURATION_ID || "";
 const termiiEmailTemplateId = process.env.TERMII_EMAIL_TEMPLATE_ID || "";
 const adminBroadcastToken = process.env.ADMIN_BROADCAST_TOKEN || "";
+// Local development only: print member sign-in codes to the server console
+// instead of emailing them. Ignored on Vercel.
+const memberOtpDevLog = process.env.MEMBER_OTP_DEV_LOG === "1" && !process.env.VERCEL;
+// Resend (resend.com) sends member sign-in codes. The From address must be
+// on a domain verified in the Resend dashboard.
+const resendApiKey = process.env.RESEND_API_KEY || "";
+const memberEmailFrom = process.env.MEMBER_EMAIL_FROM || "Harvesters Akure <noreply@harvestersng.org>";
 
 // Site data (submissions, admins, sessions, audit log, launch items) lives
 // in Supabase when these are set (see site-schema.sql) -- required on
@@ -156,6 +163,8 @@ function migrateDb(db) {
   if (!Array.isArray(db.admins)) { db.admins = []; changed = true; }
   if (!Array.isArray(db.sessions)) { db.sessions = []; changed = true; }
   if (!Array.isArray(db.auditLog)) { db.auditLog = []; changed = true; }
+  if (!Array.isArray(db.memberOtps)) { db.memberOtps = []; changed = true; }
+  if (!Array.isArray(db.memberSessions)) { db.memberSessions = []; changed = true; }
   if (!db.seed) { db.seed = { readiness: 72, fundsTarget: 12000000, launchItems: [] }; changed = true; }
   if (!Array.isArray(db.seed.launchItems)) { db.seed.launchItems = []; changed = true; }
   db.seed.launchItems.forEach(item => {
@@ -694,11 +703,13 @@ function validateBirthday(body) {
   const fields = {
     fullName: cleanText(body.fullName).slice(0, 120),
     phoneNumber: cleanText(body.phoneNumber).slice(0, 30),
+    emailAddress: emailKeyOf(cleanText(body.emailAddress)),
     dateOfBirth: cleanText(body.dateOfBirth),
     photoConsent: body.photoConsent === "on" ? "on" : ""
   };
   if (!fields.fullName) throw new Error("Please enter the celebrant's full name.");
   if (fields.phoneNumber.replace(/\D/g, "").length < 7) throw new Error("Please enter a valid phone number.");
+  if (fields.emailAddress && !EMAIL_PATTERN.test(fields.emailAddress)) throw new Error("Please enter a valid email address.");
   const date = new Date(`${fields.dateOfBirth}T00:00:00Z`);
   if (!/^\d{4}-\d{2}-\d{2}$/.test(fields.dateOfBirth) || Number.isNaN(date.getTime()) || date.toISOString().slice(0, 10) !== fields.dateOfBirth) {
     throw new Error("Please enter a valid date of birth.");
@@ -712,6 +723,217 @@ function sameCelebrant(record, fields) {
   return record.type === "birthday"
     && record.fields.phoneNumber.replace(/\D/g, "").slice(-10) === fields.phoneNumber.replace(/\D/g, "").slice(-10)
     && record.fields.fullName.toLowerCase().replace(/\s+/g, " ") === fields.fullName.toLowerCase().replace(/\s+/g, " ");
+}
+
+// ---- Members -----------------------------------------------------------
+//
+// Members sign in with a 6-digit code emailed to them; there is no separate
+// sign-up -- anyone who has given an email address on a form can sign in.
+// A signed-in member only ever sees records submitted with that same email.
+// Records are deliberately NOT pulled in by phone number: phones on forms
+// are unverified, so linking by phone would let someone type a stranger's
+// number next to their own email and read that person's records.
+//
+// Sign-in codes and member sessions are read and written with targeted
+// queries on their own tables rather than through readDb/writeDb, so the
+// rest of the site keeps working even before those tables exist in Supabase.
+
+const MEMBER_SESSION_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+const OTP_TTL_MS = 10 * 60 * 1000;
+const OTP_RESEND_MS = 60 * 1000;
+const OTP_MAX_SENDS_PER_HOUR = 5;
+const OTP_MAX_ATTEMPTS = 5;
+const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const memberCodeRequests = new Map();
+const MEMBER_STORES = {
+  otp: { table: "harvesters_member_otps", key: "email", fileKey: "memberOtps" },
+  session: { table: "harvesters_member_sessions", key: "tokenHash", fileKey: "memberSessions" }
+};
+
+function emailKeyOf(value) {
+  return String(value || "").trim().toLowerCase();
+}
+
+function sha256(value) {
+  return createHash("sha256").update(value).digest("hex");
+}
+
+function assertMemberStore(error, table) {
+  if (!error) return;
+  if (/does not exist|could not find the table|PGRST205|42P01/i.test(`${error.code} ${error.message}`)) {
+    throw new Error(`Member sign-in needs a one-time database update: run site-schema.sql in Supabase (missing table ${table}).`);
+  }
+  assertNoError(error, table);
+}
+
+async function memberStoreGet(kind, id) {
+  const { table, key, fileKey } = MEMBER_STORES[kind];
+  if (!useSupabase) return readDbFromFile()[fileKey].find(row => row[key] === id) || null;
+  const { data, error } = await supabase.from(table).select("*").eq(key, id).maybeSingle();
+  assertMemberStore(error, table);
+  return data;
+}
+
+async function memberStorePut(kind, row) {
+  const { table, key, fileKey } = MEMBER_STORES[kind];
+  if (!useSupabase) {
+    const db = readDbFromFile();
+    db[fileKey] = [...db[fileKey].filter(item => item[key] !== row[key] && new Date(item.expiresAt) > new Date()), row];
+    writeDbToFile(db);
+    return;
+  }
+  const { error } = await supabase.from(table).upsert(row, { onConflict: key });
+  assertMemberStore(error, table);
+}
+
+async function memberStoreDelete(kind, id) {
+  const { table, key, fileKey } = MEMBER_STORES[kind];
+  if (!useSupabase) {
+    const db = readDbFromFile();
+    db[fileKey] = db[fileKey].filter(item => item[key] !== id);
+    writeDbToFile(db);
+    return;
+  }
+  const { error } = await supabase.from(table).delete().eq(key, id);
+  assertMemberStore(error, table);
+}
+
+function setMemberCookie(res, token) {
+  const parts = [`ha_member=${token}`, "HttpOnly", "Path=/", `Max-Age=${MEMBER_SESSION_TTL_MS / 1000}`, "SameSite=Lax"];
+  if (process.env.VERCEL) parts.push("Secure");
+  res.setHeader("Set-Cookie", parts.join("; "));
+}
+
+function clearMemberCookie(res) {
+  res.setHeader("Set-Cookie", "ha_member=; HttpOnly; Path=/; Max-Age=0; SameSite=Lax");
+}
+
+// Only a hash of the session token is stored, so a leaked database row
+// cannot be replayed as a cookie.
+async function getMemberContext(req) {
+  const token = parseCookies(req.headers.cookie).ha_member;
+  if (!token || !/^[a-f0-9]{64}$/.test(token)) return null;
+  const session = await memberStoreGet("session", sha256(token));
+  if (!session || new Date(session.expiresAt) <= new Date()) return null;
+  return { email: session.email, tokenHash: session.tokenHash };
+}
+
+function recordsForEmail(db, email) {
+  return db.submissions
+    .filter(record => record.type !== "member" && emailKeyOf(emailAddress(record.fields)) === email)
+    .sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
+}
+
+function memberRecord(db, email) {
+  return db.submissions.find(record => record.type === "member" && emailKeyOf(record.fields.emailAddress) === email);
+}
+
+function sameName(a, b) {
+  const tidy = value => String(value || "").toLowerCase().replace(/\s+/g, " ").trim();
+  return Boolean(tidy(a)) && tidy(a) === tidy(b);
+}
+
+const ACTIVITY_LABELS = {
+  counselling: ["Care request", fields => fields.careArea],
+  partnership: ["Partnership interest", fields => fields.partnershipType],
+  giving: ["Giving pledge", fields => [fields.fund, fields.amount && `₦${Number(fields.amount).toLocaleString("en-NG")}`].filter(Boolean).join(" · ")],
+  nlp: ["Prayer updates", fields => fields.prayerFocus],
+  contact: ["Message to the team", fields => fields.subject],
+  content: ["Content idea", fields => fields.subject],
+  newsletter: ["Newsletter signup", () => ""]
+};
+
+// What a signed-in member sees about themselves. Deliberately a curated
+// summary, not the raw records: admin-only fields such as a care request's
+// internal status never leave the server.
+function buildMemberProfile(db, email) {
+  const records = recordsForEmail(db, email);
+  const member = memberRecord(db, email);
+  const latest = getter => [...records].reverse().map(record => getter(record.fields)).find(Boolean) || "";
+  const name = member?.fields.fullName || latest(displayName);
+  const birthdays = records.filter(record => record.type === "birthday");
+  const ownBirthday = birthdays.find(record => sameName(record.fields.fullName, name)) || (birthdays.length === 1 ? birthdays[0] : null);
+  const photoUrl = record => `/api/member/photo/${record.id}?v=${Date.parse(record.updatedAt || record.createdAt)}`;
+  return {
+    email,
+    name,
+    phone: member?.fields.phoneNumber || latest(phoneNumber),
+    dateOfBirth: ownBirthday?.fields.dateOfBirth || latest(fields => fields.dateOfBirth),
+    photoUrl: member?.fields.photoPath ? photoUrl(member) : ownBirthday?.fields.photoPath ? photoUrl(ownBirthday) : "",
+    memberSince: records[0]?.createdAt || member?.createdAt || "",
+    communities: records.filter(record => record.type === "community").map(record => ({ name: record.fields.preferredCommunity, date: record.createdAt })),
+    departments: records.filter(record => record.type === "workforce").map(record => ({ name: record.fields.department, date: record.createdAt })),
+    birthdays: birthdays.map(record => ({
+      name: record.fields.fullName,
+      dateOfBirth: record.fields.dateOfBirth,
+      photoUrl: record.fields.photoPath ? photoUrl(record) : ""
+    })),
+    activity: records
+      .filter(record => ACTIVITY_LABELS[record.type])
+      .reverse()
+      .map(record => ({ label: ACTIVITY_LABELS[record.type][0], detail: ACTIVITY_LABELS[record.type][1](record.fields) || "", date: record.createdAt }))
+  };
+}
+
+function termiiEmailReady() {
+  return Boolean(termiiApiKey && termiiBaseUrl && termiiEmailConfigurationId && termiiEmailTemplateId);
+}
+
+function emailSignInReady() {
+  return Boolean(resendApiKey) || termiiEmailReady() || memberOtpDevLog;
+}
+
+async function sendResendEmail(to, subject, text, html) {
+  const response = await fetch("https://api.resend.com/emails", {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${resendApiKey}` },
+    body: JSON.stringify({ from: memberEmailFrom, to: [to], subject, text, html }),
+    signal: AbortSignal.timeout(15_000)
+  });
+  if (!response.ok) {
+    const result = await response.json().catch(() => ({}));
+    // The real reason (e.g. an unverified domain) goes to the server log;
+    // the visitor gets a plain message.
+    console.error(`Resend could not send the sign-in email (${response.status}): ${result.message || "unknown error"}`);
+    throw new Error("We couldn't send the sign-in email just now. Please try again in a few minutes.");
+  }
+}
+
+async function sendSignInCode(email, code) {
+  const subject = "Your Harvesters Akure sign-in code";
+  const text = `Your Harvesters Akure sign-in code is ${code}. It expires in 10 minutes. If you didn't ask for this, you can ignore this email.`;
+  if (memberOtpDevLog) {
+    console.log(`[member sign-in] code for ${email}: ${code}`);
+    return;
+  }
+  if (resendApiKey) {
+    const html = `
+      <div style="font-family:Arial,sans-serif;max-width:480px;margin:0 auto;color:#102033">
+        <h2 style="color:#071e3d">Harvesters Akure</h2>
+        <p>Use this code to sign in to your profile:</p>
+        <p style="font-size:32px;font-weight:bold;letter-spacing:8px;color:#d71920;margin:24px 0">${code}</p>
+        <p>It expires in 10 minutes.</p>
+        <p style="color:#5f6b7a;font-size:13px">If you didn't ask for this, you can safely ignore this email.</p>
+      </div>`;
+    await sendResendEmail(email, subject, text, html);
+    return;
+  }
+  await sendTermiiBulkEmail([email], subject, text);
+}
+
+function memberCodeRateLimited(req) {
+  const key = req.headers["x-forwarded-for"]?.split(",")[0].trim() || req.socket?.remoteAddress || "unknown";
+  const now = Date.now();
+  const recent = (memberCodeRequests.get(key) || []).filter(time => now - time < 15 * 60 * 1000);
+  recent.push(now);
+  memberCodeRequests.set(key, recent);
+  return recent.length > 10;
+}
+
+function codesMatch(a, b) {
+  const left = Buffer.from(String(a));
+  const right = Buffer.from(String(b));
+  return left.length === right.length && timingSafeEqual(left, right);
 }
 
 function hasCommunicationsConsent(record) {
@@ -868,7 +1090,8 @@ async function handleApi(req, res, url) {
       integrations: {
         googleSheets: Boolean(googleAppsScriptUrl && googleAppsScriptToken),
         termiiSms: Boolean(termiiApiKey && termiiBaseUrl && termiiSenderId),
-        termiiEmail: Boolean(termiiApiKey && termiiBaseUrl && termiiEmailConfigurationId && termiiEmailTemplateId)
+        termiiEmail: termiiEmailReady(),
+        memberSignInEmail: Boolean(resendApiKey) || termiiEmailReady()
       }
     });
     return true;
@@ -934,6 +1157,7 @@ async function handleApi(req, res, url) {
       const previousPhotoPath = record.fields.photoPath;
       const photoPath = `${record.id}.${photo.extension}`;
       await savePhoto(photoPath, photo);
+      if (!fields.emailAddress) delete fields.emailAddress;
       record.fields = { ...record.fields, ...fields, name: fields.fullName, photoPath, photoType: photo.contentType };
       if (existing) record.updatedAt = new Date().toISOString();
       else db.submissions.push(record);
@@ -950,7 +1174,7 @@ async function handleApi(req, res, url) {
   if (birthdayPhotoMatch && req.method === "GET") {
     const db = await readDb();
     if (!requireAdminSession(req, res, db, "view_dashboard")) return true;
-    const record = db.submissions.find(item => item.id === birthdayPhotoMatch[1] && item.type === "birthday");
+    const record = db.submissions.find(item => item.id === birthdayPhotoMatch[1]);
     const bytes = record?.fields.photoPath ? await readPhoto(record.fields.photoPath) : null;
     if (!bytes) {
       send(res, 404, { error: "Photo not found." });
@@ -962,6 +1186,170 @@ async function handleApi(req, res, url) {
       "X-Content-Type-Options": "nosniff",
       ...(url.searchParams.has("download") ? { "Content-Disposition": `attachment; filename="${record.fields.photoPath}"` } : {})
     });
+    res.end(bytes);
+    return true;
+  }
+
+  if (url.pathname === "/api/member/request-code" && req.method === "POST") {
+    try {
+      const body = await parseBody(req);
+      const email = emailKeyOf(cleanText(body.email));
+      if (!EMAIL_PATTERN.test(email)) throw new Error("Please enter a valid email address.");
+      if (!emailSignInReady()) throw new Error("Member sign-in by email hasn't been set up yet. Please try again later.");
+      if (memberCodeRateLimited(req)) {
+        send(res, 429, { error: "Too many sign-in attempts. Please wait a few minutes and try again." });
+        return true;
+      }
+      const previous = await memberStoreGet("otp", email);
+      const now = Date.now();
+      if (previous && now - new Date(previous.sentAt).getTime() < OTP_RESEND_MS) {
+        send(res, 429, { error: "A code was just sent. Please wait a minute before asking for another." });
+        return true;
+      }
+      const sameWindow = previous && now - new Date(previous.windowStart).getTime() < 60 * 60 * 1000;
+      if (sameWindow && previous.sendCount >= OTP_MAX_SENDS_PER_HOUR) {
+        send(res, 429, { error: "Too many codes requested for this email. Please try again in an hour." });
+        return true;
+      }
+      // The same reply whether or not the email is known, so this form can't
+      // be used to find out who has given their details to the church.
+      const reply = { ok: true, message: "If this email is registered with Harvesters Akure, a 6-digit code is on its way. It expires in 10 minutes." };
+      const db = await readDb();
+      const known = db.submissions.some(record => emailKeyOf(emailAddress(record.fields)) === email);
+      if (!known) {
+        send(res, 200, reply);
+        return true;
+      }
+      const code = String(randomInt(0, 1_000_000)).padStart(6, "0");
+      await sendSignInCode(email, code);
+      await memberStorePut("otp", {
+        email,
+        codeHash: sha256(`${email}:${code}`),
+        expiresAt: new Date(now + OTP_TTL_MS).toISOString(),
+        attempts: 0,
+        sentAt: new Date(now).toISOString(),
+        windowStart: sameWindow ? previous.windowStart : new Date(now).toISOString(),
+        sendCount: sameWindow ? previous.sendCount + 1 : 1
+      });
+      send(res, 200, reply);
+    } catch (error) {
+      send(res, 400, { error: error.message });
+    }
+    return true;
+  }
+
+  if (url.pathname === "/api/member/verify" && req.method === "POST") {
+    try {
+      const body = await parseBody(req);
+      const email = emailKeyOf(cleanText(body.email));
+      const code = cleanText(body.code).replace(/\D/g, "");
+      const otp = await memberStoreGet("otp", email);
+      if (!otp || new Date(otp.expiresAt) <= new Date()) throw new Error("This code has expired or was not found. Please request a new one.");
+      if (otp.attempts >= OTP_MAX_ATTEMPTS) {
+        await memberStoreDelete("otp", email);
+        throw new Error("Too many incorrect attempts. Please request a new code.");
+      }
+      if (!codesMatch(sha256(`${email}:${code}`), otp.codeHash)) {
+        await memberStorePut("otp", { ...otp, attempts: otp.attempts + 1 });
+        throw new Error("That code is not correct. Please check the email and try again.");
+      }
+      await memberStoreDelete("otp", email);
+      const token = randomBytes(32).toString("hex");
+      await memberStorePut("session", {
+        tokenHash: sha256(token),
+        email,
+        createdAt: new Date().toISOString(),
+        expiresAt: new Date(Date.now() + MEMBER_SESSION_TTL_MS).toISOString()
+      });
+      const db = await readDb();
+      const existing = memberRecord(db, email);
+      if (existing) {
+        existing.fields.lastSignInAt = new Date().toISOString();
+      } else {
+        db.submissions.push({
+          id: randomUUID(),
+          type: "member",
+          fields: { emailAddress: email, lastSignInAt: new Date().toISOString() },
+          shortCode: createShortCode(db),
+          status: "Member",
+          createdAt: new Date().toISOString()
+        });
+      }
+      await writeDb(db);
+      setMemberCookie(res, token);
+      send(res, 200, { profile: buildMemberProfile(db, email) });
+    } catch (error) {
+      send(res, 400, { error: error.message });
+    }
+    return true;
+  }
+
+  if (url.pathname === "/api/member/me" && req.method === "GET") {
+    const ctx = await getMemberContext(req).catch(() => null);
+    send(res, 200, { profile: ctx ? buildMemberProfile(await readDb(), ctx.email) : null });
+    return true;
+  }
+
+  if (url.pathname === "/api/member/logout" && req.method === "POST") {
+    const ctx = await getMemberContext(req).catch(() => null);
+    if (ctx) await memberStoreDelete("session", ctx.tokenHash).catch(() => {});
+    clearMemberCookie(res);
+    send(res, 200, { ok: true });
+    return true;
+  }
+
+  if (url.pathname === "/api/member/profile" && req.method === "POST") {
+    const ctx = await getMemberContext(req);
+    if (!ctx) {
+      send(res, 401, { error: "Please sign in again." });
+      return true;
+    }
+    try {
+      const body = await parseBody(req, 2_500_000);
+      const fullName = cleanText(body.fullName).slice(0, 120);
+      const phone = cleanText(body.phoneNumber).slice(0, 30);
+      if (!fullName) throw new Error("Please enter your full name.");
+      if (phone && phone.replace(/\D/g, "").length < 7) throw new Error("Please enter a valid phone number.");
+      const photo = body.photo ? parsePhoto(body.photo) : null;
+      const db = await readDb();
+      const record = memberRecord(db, ctx.email);
+      if (!record) throw new Error("Please sign in again.");
+      const previousPhotoPath = record.fields.photoPath;
+      if (photo) {
+        const photoPath = `${record.id}.${photo.extension}`;
+        await savePhoto(photoPath, photo);
+        record.fields.photoPath = photoPath;
+        record.fields.photoType = photo.contentType;
+      }
+      record.fields.fullName = fullName;
+      record.fields.name = fullName;
+      record.fields.phoneNumber = phone;
+      record.updatedAt = new Date().toISOString();
+      await writeDb(db);
+      if (photo && previousPhotoPath && previousPhotoPath !== record.fields.photoPath) await deletePhoto(previousPhotoPath);
+      send(res, 200, { profile: buildMemberProfile(db, ctx.email) });
+    } catch (error) {
+      send(res, 400, { error: error.message });
+    }
+    return true;
+  }
+
+  const memberPhotoMatch = url.pathname.match(/^\/api\/member\/photo\/([^/]+)$/);
+  if (memberPhotoMatch && req.method === "GET") {
+    const ctx = await getMemberContext(req);
+    if (!ctx) {
+      send(res, 401, { error: "Please sign in again." });
+      return true;
+    }
+    const db = await readDb();
+    const record = db.submissions.find(item => item.id === memberPhotoMatch[1]);
+    const owned = record && emailKeyOf(emailAddress(record.fields)) === ctx.email;
+    const bytes = owned && record.fields.photoPath ? await readPhoto(record.fields.photoPath) : null;
+    if (!bytes) {
+      send(res, 404, { error: "Photo not found." });
+      return true;
+    }
+    res.writeHead(200, { "Content-Type": record.fields.photoType || "image/jpeg", "Cache-Control": "private, max-age=300", "X-Content-Type-Options": "nosniff" });
     res.end(bytes);
     return true;
   }

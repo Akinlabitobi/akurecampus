@@ -13,7 +13,8 @@ const navItems = [
   ["attendance", "Attendance"],
   ["birthdays", "Birthdays"],
   ["gallery", "Gallery"],
-  ["contact", "Contact"]
+  ["contact", "Contact"],
+  ["profile", "My Profile"]
 ];
 
 // Deep-linkable views, via a URL hash (e.g. #admin) rather than a real path
@@ -46,7 +47,25 @@ const communities = [
   ["Men of Purpose", "Men sharpening one another through prayer, service, and accountability."],
   ["Women of Grace", "Women walking in wisdom, strength, leadership, and devotion."],
   ["Teens", "A safe, energetic space for teenagers to encounter God and grow boldly."],
-  ["Prayer Circle", "Intercessors covering the campus, city, leaders, and launch team."]
+  ["Prayer Circle", "Intercessors covering the campus, city, leaders, and launch team."],
+  ["Bible Study Group", "Digging into God's Word together, one book and one question at a time."],
+  ["Worship and Prayer Group", "People who love to seek God's presence through worship and prayer."],
+  ["Family and Marriage Enrichment", "Strengthening homes with godly wisdom for marriages, parenting, and family life."],
+  ["Accountability and Personal Growth", "Honest friendships that help you grow in character, habits, and faith."],
+  ["Young Professionals", "Early-career believers growing in faith, excellence, and influence at work."],
+  ["Business and Marketplace", "Entrepreneurs and professionals bringing kingdom values into business."],
+  ["Tech and Innovation", "Builders, coders, and problem-solvers using technology for good."],
+  ["Influencers and Creative Circle", "Content creators, artists, and storytellers shaping culture with purpose."],
+  ["Fashion and Lifestyle", "Style, beauty, and lifestyle enthusiasts expressing faith with excellence."],
+  ["Culinary and Catering", "Cooks, bakers, and caterers who love to serve people around the table."],
+  ["FUTA Cell", "A cell group meeting around FUTA and its surroundings."],
+  ["Ijoka Cell", "A cell group meeting around Ijoka and nearby streets."],
+  ["Lafe / Ondo Road Cell", "A cell group meeting around Lafe and the Ondo Road axis."],
+  ["Alagbaka Cell", "A cell group meeting around Alagbaka and the GRA."],
+  ["Oda Road Cell", "A cell group meeting around Oda Road and nearby areas."],
+  ["Oke Aro Cell", "A cell group meeting around Oke Aro and its surroundings."],
+  ["Oke Ijebu Cell", "A cell group meeting around Oke Ijebu and nearby areas."],
+  ["Sijuwade Cell", "A cell group meeting around Sijuwade and its surroundings."]
 ];
 
 const departments = [
@@ -116,10 +135,22 @@ let broadcastNoteType = "";
 // The community/department picked on the Communities or Workforce page. The
 // signup form stays hidden until one is picked, then opens with it locked in.
 let selectedChoice = { community: "", workforce: "" };
-// The birthday photo, already shrunk to a JPEG data URL in the browser (see
-// preparePhoto), kept outside the DOM so a re-render doesn't lose it.
-let birthdayPhoto = "";
-let birthdayPhotoBusy = false;
+// Photos picked on the birthday form and the profile editor, already shrunk
+// to JPEG data URLs in the browser (see preparePhoto), kept outside the DOM
+// so a re-render doesn't lose them.
+let photoDrafts = { birthday: "", member: "" };
+let photoBusy = { birthday: false, member: false };
+// Member sign-in: undefined = unchecked, null = signed out, object = profile.
+let memberProfile;
+let memberChecking = false;
+let memberStep = "email";
+let memberEmail = "";
+let memberNote = "";
+let memberNoteType = "";
+let memberBusy = false;
+let memberEditing = false;
+// Admin Members tab: the person whose full profile is open, by group key.
+let selectedMemberKey = "";
 
 function icon(name) {
   const paths = {
@@ -146,7 +177,9 @@ function icon(name) {
 function navigate(view, options = {}) {
   if (view !== activeView) {
     selectedChoice = { community: "", workforce: "" };
-    birthdayPhoto = "";
+    photoDrafts = { birthday: "", member: "" };
+    memberEditing = false;
+    setMemberNote("");
   }
   activeView = view;
   menuOpen = false;
@@ -401,7 +434,7 @@ function homeIntro() {
           <h2>Take Your Next Step For A City - Wide Launch.</h2>
         </div>
         ${items.map(([title, text, view, cta]) => `
-          <article>
+          <article>l
             <strong>${title}</strong>
             <p>${text}</p>
             <a class="intro-link" href="#${view}" data-nav="${view}">${cta} ${icon("arrow")}</a>
@@ -556,7 +589,8 @@ function simplePage(kind) {
     attendance: ["Attendance", "Mark attendance with today's daily code.", attendancePage()],
     birthdays: ["Birthday Celebrations", "Share your birthday with the Harvesters Akure family so we can celebrate you.", birthdayPage()],
     gallery: ["Gallery", "A growing archive of launch, worship, outreach, and community moments.", gallerySection() + formPage("Gallery Upload or Content Idea", ["Full name", "Email address", "Subject", "Message"], "content")],
-    contact: ["Contact Us", "Reach the Akure launch team and stay updated.", contactPage()]
+    contact: ["Contact Us", "Reach the Akure launch team and stay updated.", contactPage()],
+    profile: ["My Profile", "Sign in with your email to see and update your Harvesters Akure details.", profilePage()]
   };
   const [title, subtitle, body] = pageData[kind];
   return `
@@ -571,11 +605,16 @@ function simplePage(kind) {
   `;
 }
 
+function communityCard(title, text) {
+  return `<article class="card compact ${selectedChoice.community === title ? "selected" : ""}"><h3>${title}</h3><p>${text}</p><button class="btn secondary block" data-choose="community" data-choice="${title}">Register Interest</button></article>`;
+}
+
 function communityPage() {
   return `
     <section class="section">
-      <div class="container card-grid two">
-        ${communities.map(([title, text]) => `<article class="card compact ${selectedChoice.community === title ? "selected" : ""}"><h3>${title}</h3><p>${text}</p><button class="btn secondary block" data-choose="community" data-choice="${title}">Register Interest</button></article>`).join("")}
+      <div class="container">
+        <div class="center"><span class="label">Communities</span><h2>Find People Who Share Your Passion</h2></div>
+        <div class="card-grid">${communities.map(([title, text]) => communityCard(title, text)).join("")}</div>
       </div>
     </section>
     ${lockedFormModal("Community Signup", ["Full name", "Phone number", "Email address", "Preferred community", "Area in Akure", "Date of Birth", "Would you like to lead?"], "community", "Preferred community")}
@@ -712,22 +751,134 @@ function birthdayPage() {
           <h3>Birthday Details</h3>
           <label><span>Full name</span><input name="fullName" placeholder="Full name" autocomplete="name" required /></label>
           <label><span>Phone number</span><input name="phoneNumber" type="tel" placeholder="Phone number" autocomplete="tel" required /></label>
+          <label><span>Email address (optional)</span><input name="emailAddress" type="email" placeholder="So it shows on your My Profile page" autocomplete="email" value="${escapeHtml(memberProfile?.email || "")}" /></label>
           <label><span>Date of birth</span><input name="dateOfBirth" type="date" min="1900-01-01" max="${localDateKey(new Date())}" required /></label>
-          <div class="photo-field">
-            <span>Your photo</span>
-            <label class="photo-picker ${birthdayPhoto ? "has-photo" : ""}">
-              <input name="photo" type="file" accept="image/jpeg,image/png,image/webp,image/heic,image/heif" data-birthday-photo />
-              <span class="photo-preview">${birthdayPhoto ? `<img src="${birthdayPhoto}" alt="Selected photo" />` : icon("camera")}</span>
-              <span class="photo-copy">
-                <strong>${birthdayPhotoBusy ? "Preparing photo..." : birthdayPhoto ? "Change photo" : "Add a photo"}</strong>
-                <small>A clear, recent picture of your face. JPEG or PNG.</small>
-              </span>
-            </label>
-          </div>
+          ${photoPicker("birthday", "Your photo")}
           <label class="consent"><input name="photoConsent" type="checkbox" /> <span>I'm happy for Harvesters Akure to share this photo and my name when celebrating my birthday.</span></label>
           <button class="btn primary block" type="submit">Send My Birthday ${icon("arrow")}</button>
           <p class="form-note">Your phone number stays private to the team.</p>
         </form>
+      </div>
+    </section>
+  `;
+}
+
+function profilePage() {
+  if (memberProfile === undefined) {
+    return `<section class="section"><div class="container narrow"><div class="form"><h3>Loading your profile...</h3></div></div></section>`;
+  }
+  return memberProfile ? memberProfileView() : memberSignIn();
+}
+
+function memberNoteMarkup() {
+  return `<p class="form-note ${memberNoteType}">${escapeHtml(memberNote)}</p>`;
+}
+
+function memberSignIn() {
+  const form = memberStep === "code"
+    ? `
+      <form class="form" data-member-code-form>
+        <h3>Enter Your Code</h3>
+        <p class="muted">We sent a 6-digit code to <strong>${escapeHtml(memberEmail)}</strong>. Check your spam folder if it hasn't arrived in a minute or two.</p>
+        <label><span>6-digit code</span><input name="code" inputmode="numeric" autocomplete="one-time-code" maxlength="6" placeholder="123456" required /></label>
+        <button class="btn primary block" type="submit" ${memberBusy ? "disabled" : ""}>${memberBusy ? "Checking..." : "Sign In"} ${icon("arrow")}</button>
+        <div class="inline-actions">
+          <button class="btn ghost-dark" type="button" data-member-resend ${memberBusy ? "disabled" : ""}>Send a new code</button>
+          <button class="btn ghost-dark" type="button" data-member-change-email>Use a different email</button>
+        </div>
+        ${memberNoteMarkup()}
+      </form>
+    `
+    : `
+      <form class="form" data-member-email-form>
+        <h3>Sign In</h3>
+        <p class="muted">Enter the email address you used on any Harvesters Akure form. We'll email you a 6-digit code &mdash; no password needed.</p>
+        <label><span>Email address</span><input name="email" type="email" autocomplete="email" placeholder="you@example.com" value="${escapeHtml(memberEmail)}" required /></label>
+        <button class="btn primary block" type="submit" ${memberBusy ? "disabled" : ""}>${memberBusy ? "Sending..." : "Email Me a Code"} ${icon("arrow")}</button>
+        ${memberNoteMarkup()}
+      </form>
+    `;
+  return `
+    <section class="section">
+      <div class="container split">
+        <div>
+          <span class="label">Members</span>
+          <h2>Everything About You, In One Place</h2>
+          <p>See your communities, the teams you serve on, and your birthday &mdash; and keep your name, phone number, and photo up to date.</p>
+          <div class="attendance-steps">
+            <div><strong>1</strong><span>Enter the email you used on our forms</span></div>
+            <div><strong>2</strong><span>Type in the code we email you</span></div>
+            <div><strong>3</strong><span>View and update your profile</span></div>
+          </div>
+          <p class="muted">New here? <a href="#communities" data-nav="communities">Join a community</a> or <a href="#birthdays" data-nav="birthdays">send your birthday</a> with your email address first, then come back to sign in.</p>
+        </div>
+        ${form}
+      </div>
+    </section>
+  `;
+}
+
+function formatDate(value) {
+  if (!value) return "-";
+  const date = /^\d{4}-\d{2}-\d{2}$/.test(value) ? new Date(`${value}T00:00:00`) : new Date(value);
+  return Number.isNaN(date.getTime()) ? "-" : date.toLocaleDateString("en-GB", { day: "numeric", month: "short", year: "numeric" });
+}
+
+function initials(name) {
+  return escapeHtml(String(name || "?").trim().split(/\s+/).slice(0, 2).map(part => part[0]).join("").toUpperCase() || "?");
+}
+
+function profileCard(title, iconName, body) {
+  return `<article class="profile-section"><h3>${icon(iconName)} ${title}</h3>${body}</article>`;
+}
+
+function memberProfileView() {
+  const profile = memberProfile;
+  const list = (items, render) => `<ul class="profile-list">${items.map(item => `<li>${render(item)}</li>`).join("")}</ul>`;
+  const empty = (text, view, cta) => `<p class="muted">${text}</p><button class="btn secondary" data-nav="${view}">${cta} ${icon("arrow")}</button>`;
+  const editor = `
+    <form class="form profile-editor" data-member-profile-form>
+      <h3>Edit Profile</h3>
+      <label><span>Full name</span><input name="fullName" value="${escapeHtml(profile.name)}" autocomplete="name" required /></label>
+      <label><span>Phone number</span><input name="phoneNumber" type="tel" value="${escapeHtml(profile.phone)}" autocomplete="tel" placeholder="Phone number" /></label>
+      <label><span>Email address</span><input value="${escapeHtml(profile.email)}" readonly /></label>
+      ${photoPicker("member", "Profile photo", profile.photoUrl)}
+      <div class="inline-actions">
+        <button class="btn primary" type="submit">Save Changes</button>
+        <button class="btn ghost-dark" type="button" data-member-cancel-edit>Cancel</button>
+      </div>
+      ${memberNoteMarkup()}
+    </form>
+  `;
+  return `
+    <section class="section">
+      <div class="container profile-layout">
+        <article class="profile-head">
+          <div class="profile-photo">${profile.photoUrl ? `<img src="${escapeHtml(profile.photoUrl)}" alt="${escapeHtml(profile.name)}" />` : `<span>${initials(profile.name)}</span>`}</div>
+          <div class="profile-identity">
+            <h2>${escapeHtml(profile.name || "Welcome")}</h2>
+            <p>${icon("mail")} ${escapeHtml(profile.email)}</p>
+            ${profile.phone ? `<p>${icon("phone")} ${escapeHtml(profile.phone)}</p>` : ""}
+            ${profile.memberSince ? `<small>With us since ${formatDate(profile.memberSince)}</small>` : ""}
+          </div>
+          <div class="profile-actions">
+            ${memberEditing ? "" : `<button class="btn primary" type="button" data-member-edit>Edit Profile</button>`}
+            <button class="btn ghost-dark" type="button" data-member-logout>Sign Out</button>
+          </div>
+        </article>
+        ${memberEditing ? editor : memberNote ? memberNoteMarkup() : ""}
+        <div class="profile-grid">
+          ${profileCard("Communities", "users", profile.communities.length
+            ? list(profile.communities, item => `<strong>${escapeHtml(item.name || "Community")}</strong><small>Joined ${formatDate(item.date)}</small>`)
+            : empty("You haven't joined a community yet.", "communities", "Join a Community"))}
+          ${profileCard("Workforce", "briefcase", profile.departments.length
+            ? list(profile.departments, item => `<strong>${escapeHtml(item.name || "Department")}</strong><small>Applied ${formatDate(item.date)}</small>`)
+            : empty("You're not serving on a team yet.", "workforce", "Join the Workforce"))}
+          ${profileCard("Birthdays", "cake", profile.birthdays.length
+            ? list(profile.birthdays, item => `<span class="profile-person">${item.photoUrl ? `<img src="${escapeHtml(item.photoUrl)}" alt="" />` : ""}<span><strong>${escapeHtml(item.name)}</strong><small>${birthdayLabel(item.dateOfBirth)}</small></span></span>`) + `<button class="btn outline small" data-nav="birthdays">Add or update a birthday</button>`
+            : empty("We don't have your birthday yet. Add it with this email address so we can celebrate you.", "birthdays", "Add My Birthday"))}
+          ${profile.activity.length ? profileCard("Other Activity", "heart", list(profile.activity, item => `<strong>${escapeHtml(item.label)}</strong><small>${item.detail ? `${escapeHtml(item.detail)} &middot; ` : ""}${formatDate(item.date)}</small>`)) : ""}
+        </div>
       </div>
     </section>
   `;
@@ -887,6 +1038,7 @@ function passwordNudge() {
 function dashboard() {
   const tabs = [
     ["overview", "Overview", true],
+    ["members", "Members", true],
     ["communities", "Communities", true],
     ["workforce", "Workforce", true],
     ["attendance", "Attendance", true],
@@ -974,6 +1126,7 @@ function dashboardContent() {
     return `<div class="metric-grid"><article class="metric large"><span>Today's Code</span><strong>${dashboardData.dailyAttendance?.code || "-"}</strong><small>${dashboardData.dailyAttendance?.date || ""}</small></article><article class="metric large"><span>Total Check-Ins</span><strong>${metrics.attendance}</strong><small>attendance records</small></article></div>${editableTable(["Name", "Code", "Phone", "Department", "Service", "Time"], rows, records)}`;
   }
   if (activeDashboard === "birthdays") return birthdaysTab(submissions);
+  if (activeDashboard === "members") return membersTab(submissions);
   if (activeDashboard === "giving") {
     const records = submissions.filter(row => ["giving", "partnership"].includes(row.type));
     const rows = records.map(row => [row.type, recordCode(row), row.fields.fullName || "-", row.fields.phoneNumber || "-", row.fields.fund || row.fields.partnershipType || "-", row.fields.amount ? money(row.fields.amount) : "-", new Date(row.createdAt).toLocaleDateString()]);
@@ -1009,6 +1162,141 @@ function dashboardContent() {
   `;
 }
 
+const SUBMISSION_LABELS = {
+  community: "Community", workforce: "Workforce", birthday: "Birthday", attendance: "Attendance", member: "Profile",
+  counselling: "Care request", partnership: "Partnership", giving: "Giving", nlp: "Prayer updates",
+  contact: "Message", content: "Content idea", newsletter: "Newsletter"
+};
+const CONTACT_FIELDS = ["fullName", "name", "phoneNumber", "phone", "emailAddress", "email", "photoPath", "photoType", "photoConsent", "communicationsConsent", "lastSignInAt"];
+
+function adminPhotoUrl(record) {
+  return `/api/admin/birthday-photo/${encodeURIComponent(record.id)}?v=${Date.parse(record.updatedAt || record.createdAt)}`;
+}
+
+// One entry per person. Records are joined when they share a phone number
+// (last 10 digits) or an email address, transitively -- so someone who gave
+// phone + email on the community form and only their phone on the birthday
+// form still comes out as one person. This is for the team only; members
+// themselves only ever see records under their own verified email.
+function memberDirectory(submissions) {
+  const parent = new Map();
+  const find = key => {
+    while (parent.get(key) !== key) key = parent.get(key);
+    return key;
+  };
+  const keysOf = row => {
+    const phone = String(row.fields.phoneNumber || row.fields.phone || "").replace(/\D/g, "");
+    const email = String(row.fields.emailAddress || row.fields.email || "").trim().toLowerCase();
+    return [phone.length >= 10 ? `p:${phone.slice(-10)}` : "", email ? `e:${email}` : ""].filter(Boolean);
+  };
+  const entries = submissions.map(row => ({ row, keys: keysOf(row) })).filter(entry => entry.keys.length);
+  entries.forEach(({ keys }) => keys.forEach(key => parent.has(key) || parent.set(key, key)));
+  entries.forEach(({ keys }) => keys.slice(1).forEach(key => parent.set(find(key), find(keys[0]))));
+  const groups = new Map();
+  entries.forEach(({ row, keys }) => {
+    const root = find(keys[0]);
+    groups.set(root, [...(groups.get(root) || []), row]);
+  });
+  return [...groups.values()].map(summarizeMember).sort((a, b) => b.lastActive - a.lastActive);
+}
+
+function summarizeMember(records) {
+  const sorted = [...records].sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt));
+  const member = sorted.find(row => row.type === "member");
+  const latest = getter => [...sorted].reverse().map(row => getter(row.fields)).find(Boolean) || "";
+  const name = member?.fields.fullName || latest(fields => fields.fullName || fields.name);
+  const birthdays = sorted.filter(row => row.type === "birthday");
+  const photoRecord = (member?.fields.photoPath && member)
+    || birthdays.find(row => row.fields.photoPath && String(row.fields.fullName).toLowerCase() === String(name).toLowerCase())
+    || birthdays.find(row => row.fields.photoPath);
+  return {
+    // The oldest record's id: stable across reloads, unlike the grouping keys.
+    key: sorted[0].id,
+    records: sorted,
+    name,
+    phone: member?.fields.phoneNumber || latest(fields => fields.phoneNumber || fields.phone),
+    email: latest(fields => fields.emailAddress || fields.email),
+    photoUrl: photoRecord ? adminPhotoUrl(photoRecord) : "",
+    communities: [...new Set(sorted.filter(row => row.type === "community").map(row => row.fields.preferredCommunity).filter(Boolean))],
+    departments: [...new Set(sorted.filter(row => row.type === "workforce").map(row => row.fields.department).filter(Boolean))],
+    birthday: (birthdays.find(row => String(row.fields.fullName).toLowerCase() === String(name).toLowerCase()) || birthdays[0])?.fields.dateOfBirth || latest(fields => fields.dateOfBirth),
+    attendance: sorted.filter(row => row.type === "attendance").length,
+    signedInAt: member?.fields.lastSignInAt || "",
+    lastActive: Math.max(...sorted.map(row => Date.parse(row.updatedAt || row.createdAt) || 0))
+  };
+}
+
+function memberAvatar(person, size = "") {
+  return person.photoUrl
+    ? `<img class="member-avatar ${size}" src="${person.photoUrl}" alt="" loading="lazy" />`
+    : `<span class="member-avatar ${size}">${initials(person.name)}</span>`;
+}
+
+function memberTags(person) {
+  return [
+    ...person.communities.map(name => `<span class="tag">${escapeHtml(name)}</span>`),
+    ...person.departments.map(name => `<span class="tag blue">${escapeHtml(name)}</span>`),
+    person.birthday ? `<span class="tag soft">${icon("cake")} ${birthdayLabel(person.birthday)}</span>` : "",
+    person.attendance ? `<span class="tag soft">${person.attendance} check-in${person.attendance === 1 ? "" : "s"}</span>` : ""
+  ].join("");
+}
+
+function recordDetails(row) {
+  return Object.entries(row.fields)
+    .filter(([key, value]) => value && !CONTACT_FIELDS.includes(key))
+    .map(([key, value]) => `<span><b>${escapeHtml(key.replace(/([A-Z])/g, " $1").toLowerCase())}:</b> ${escapeHtml(value)}</span>`)
+    .join("") || "-";
+}
+
+function membersTab(submissions) {
+  const people = memberDirectory(submissions);
+  const person = selectedMemberKey && people.find(item => item.key === selectedMemberKey);
+  if (person) {
+    return `
+      <button class="btn ghost-dark" type="button" data-member-back>&larr; All members</button>
+      <div class="panel member-detail">
+        ${memberAvatar(person, "large")}
+        <div>
+          <h3>${escapeHtml(person.name || "Unnamed")}</h3>
+          <p class="muted">${[person.phone, person.email].filter(Boolean).map(escapeHtml).join(" &middot; ") || "No contact details"}</p>
+          <div class="tag-row">${memberTags(person)}</div>
+          <small class="muted">${person.signedInAt ? `Last signed in to My Profile ${new Date(person.signedInAt).toLocaleString()}` : "Has not signed in to My Profile"}</small>
+        </div>
+      </div>
+      <div class="table section-table">${table(["Type", "Code", "Name", "Details", "Date"], person.records.map(row => [
+        SUBMISSION_LABELS[row.type] || escapeHtml(row.type),
+        recordCode(row),
+        escapeHtml(row.fields.fullName || row.fields.name || "-"),
+        `<div class="record-details">${recordDetails(row)}</div>`,
+        new Date(row.createdAt).toLocaleDateString()
+      ]))}</div>
+    `;
+  }
+  selectedMemberKey = "";
+  const rows = people.map(item => `
+    <tr data-member-row="${escapeHtml([item.name, item.phone, item.email, ...item.communities, ...item.departments].join(" ").toLowerCase())}">
+      <td>${memberAvatar(item)}</td>
+      <td><strong>${escapeHtml(item.name || "Unnamed")}</strong></td>
+      <td>${escapeHtml(item.phone || "-")}</td>
+      <td>${escapeHtml(item.email || "-")}</td>
+      <td><div class="tag-row">${memberTags(item) || "-"}</div></td>
+      <td>${new Date(item.lastActive).toLocaleDateString()}</td>
+      <td class="actions-cell"><button class="btn outline small" type="button" data-view-member="${item.key}">View</button></td>
+    </tr>
+  `).join("");
+  return `
+    <div class="metric-grid">
+      <article class="metric large"><span>People</span><strong>${people.length}</strong><small>grouped by phone and email</small></article>
+      <article class="metric large"><span>Signed In</span><strong>${people.filter(item => item.signedInAt).length}</strong><small>used My Profile</small></article>
+      <article class="metric large"><span>In a Community</span><strong>${people.filter(item => item.communities.length).length}</strong><small>joined at least one</small></article>
+      <article class="metric large"><span>Serving</span><strong>${people.filter(item => item.departments.length).length}</strong><small>workforce applicants</small></article>
+    </div>
+    <div class="panel member-search"><input type="search" placeholder="Search by name, phone, email, community, or department" data-member-search /></div>
+    <div class="table"><table><thead><tr><th>Photo</th><th>Name</th><th>Phone</th><th>Email</th><th>Involvement</th><th>Last Active</th><th></th></tr></thead>
+      <tbody>${rows || `<tr><td colspan="7">No members yet.</td></tr>`}</tbody></table></div>
+  `;
+}
+
 // Sorted by how soon each birthday comes round, so the people to celebrate
 // next are always at the top.
 function birthdaysTab(submissions) {
@@ -1019,9 +1307,9 @@ function birthdaysTab(submissions) {
     .sort((a, b) => (a.next?.days ?? 999) - (b.next?.days ?? 999) || String(a.row.fields.fullName).localeCompare(String(b.row.fields.fullName)));
   const within = days => records.filter(({ next }) => next && next.days <= days);
   const thisMonth = records.filter(({ next }) => next && next.date.getMonth() === today.getMonth() && next.date.getFullYear() === today.getFullYear());
-  const photoUrl = row => `/api/admin/birthday-photo/${encodeURIComponent(row.id)}`;
+  const photoUrl = adminPhotoUrl;
   const photoCell = row => row.fields.photoPath
-    ? `<a class="birthday-thumb" href="${photoUrl(row)}?download" title="Download photo"><img src="${photoUrl(row)}" alt="${escapeHtml(row.fields.fullName)}" loading="lazy" /></a>`
+    ? `<a class="birthday-thumb" href="${photoUrl(row)}&download" title="Download photo"><img src="${photoUrl(row)}" alt="${escapeHtml(row.fields.fullName)}" loading="lazy" /></a>`
     : "-";
   const whenLabel = next => !next ? "-" : next.days === 0 ? `<strong class="today-badge">Today</strong>` : next.days === 1 ? "Tomorrow" : `In ${next.days} days`;
   const celebrants = within(0);
@@ -1049,7 +1337,7 @@ function birthdaysTab(submissions) {
               ${row.fields.photoPath ? `<img src="${photoUrl(row)}" alt="${escapeHtml(row.fields.fullName)}" />` : `<div class="celebrant-placeholder">${icon("cake")}</div>`}
               <strong>${escapeHtml(row.fields.fullName)}</strong>
               <small>Turning ${next.age} &middot; ${escapeHtml(row.fields.phoneNumber)}</small>
-              ${row.fields.photoPath ? `<a class="btn outline small" href="${photoUrl(row)}?download">Download Photo</a>` : ""}
+              ${row.fields.photoPath ? `<a class="btn outline small" href="${photoUrl(row)}&download">Download Photo</a>` : ""}
             </article>
           `).join("")}
         </div>
@@ -1211,7 +1499,7 @@ function footer() {
       <div class="footer-main">
         <div><img src="/logo-white.png" alt="Harvesters Akure" /><p>A campus of Harvesters International Christian Centre, coming to Akure.</p></div>
         <div><h4>The Church</h4><button data-nav="about">About Harvesters Akure</button><button data-nav="nlp">Next Level Prayers</button><button data-nav="gallery">Gallery</button></div>
-        <div><h4>Get Involved</h4><button data-nav="communities">Join a Community</button><button data-nav="workforce">Join the Workforce</button><button data-nav="partnership">Partner With Us</button></div>
+        <div><h4>Get Involved</h4><button data-nav="communities">Join a Community</button><button data-nav="workforce">Join the Workforce</button><button data-nav="partnership">Partner With Us</button><button data-nav="birthdays">Birthday Celebrations</button><button data-nav="profile">My Profile</button></div>
         <div><h4>Contact</h4><p>Akure, Ondo State</p><a href="${contactInfo.phoneHref}">${contactInfo.phone}</a><p>akure@harvestersng.org</p><div class="footer-social">${socialLinks.map(social => `<a href="${social.url}" target="_blank" rel="noopener noreferrer" aria-label="${social.name} ${social.handle}" title="${social.name} ${social.handle}">${icon(social.name.toLowerCase())}</a>`).join("")}</div><button data-nav="dashboard">Team Dashboard</button><a href="/callcentre/">Outreach Call Centre</a></div>
       </div>
       <div class="copyright">© 2026 Harvesters Akure. A campus of Harvesters International Christian Centre.</div>
@@ -1434,7 +1722,53 @@ function render() {
     event.preventDefault();
     saveAttendance(form);
   }));
-  document.querySelector("[data-birthday-photo]")?.addEventListener("change", event => choosePhoto(event.target));
+  document.querySelectorAll("[data-photo-input]").forEach(input => input.addEventListener("change", () => choosePhoto(input)));
+  document.querySelector("[data-member-email-form]")?.addEventListener("submit", event => {
+    event.preventDefault();
+    memberEmail = event.target.email.value.trim();
+    requestMemberCode();
+  });
+  document.querySelector("[data-member-code-form]")?.addEventListener("submit", event => {
+    event.preventDefault();
+    verifyMemberCode(event.target.code.value);
+  });
+  document.querySelector("[data-member-resend]")?.addEventListener("click", () => requestMemberCode());
+  document.querySelector("[data-member-change-email]")?.addEventListener("click", () => {
+    memberStep = "email";
+    setMemberNote("");
+    render();
+  });
+  document.querySelector("[data-member-edit]")?.addEventListener("click", () => {
+    memberEditing = true;
+    setMemberNote("");
+    render();
+  });
+  document.querySelector("[data-member-cancel-edit]")?.addEventListener("click", () => {
+    memberEditing = false;
+    photoDrafts.member = "";
+    setMemberNote("");
+    render();
+  });
+  document.querySelector("[data-member-profile-form]")?.addEventListener("submit", event => {
+    event.preventDefault();
+    saveMemberProfile(event.target);
+  });
+  document.querySelector("[data-member-logout]")?.addEventListener("click", signOutMember);
+  document.querySelector("[data-member-search]")?.addEventListener("input", event => {
+    const query = event.target.value.trim().toLowerCase();
+    document.querySelectorAll("[data-member-row]").forEach(row => {
+      row.hidden = Boolean(query) && !row.dataset.memberRow.includes(query);
+    });
+  });
+  document.querySelectorAll("[data-view-member]").forEach(button => button.addEventListener("click", () => {
+    selectedMemberKey = button.dataset.viewMember;
+    render();
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  }));
+  document.querySelector("[data-member-back]")?.addEventListener("click", () => {
+    selectedMemberKey = "";
+    render();
+  });
   document.querySelector("[data-birthday-form]")?.addEventListener("submit", event => {
     event.preventDefault();
     saveBirthday(event.target);
@@ -1633,6 +1967,7 @@ function render() {
   });
   if (activeView === "home") initHeroScene();
   if (activeView === "attendance") loadDailyAttendanceCode();
+  if (activeView === "profile" && memberProfile === undefined) loadMemberProfile();
   if (activeView === "dashboard") {
     if (adminSession === undefined) loadAdminSession();
     else if (adminSession) {
@@ -1659,31 +1994,57 @@ async function loadDailyAttendanceCode() {
   }
 }
 
-function updatePhotoPicker(form) {
+// The preview shows, in order: a newly picked photo, the photo already on
+// file (the profile editor passes it as `existing`), or a camera icon.
+function photoPickerInner(target, existing = "") {
+  const shown = photoDrafts[target] || existing;
+  return `
+    <span class="photo-preview">${shown ? `<img src="${escapeHtml(shown)}" alt="Selected photo" />` : icon("camera")}</span>
+    <span class="photo-copy">
+      <strong>${photoBusy[target] ? "Preparing photo..." : shown ? "Change photo" : "Add a photo"}</strong>
+      <small>A clear, recent picture of your face. JPEG or PNG.</small>
+    </span>
+  `;
+}
+
+function photoPicker(target, label, existing = "") {
+  return `
+    <div class="photo-field">
+      <span>${label}</span>
+      <label class="photo-picker ${photoDrafts[target] || existing ? "has-photo" : ""}" data-photo-existing="${escapeHtml(existing)}">
+        <input name="photo" type="file" accept="image/jpeg,image/png,image/webp,image/heic,image/heif" data-photo-input="${target}" />
+        <span class="photo-picker-inner">${photoPickerInner(target, existing)}</span>
+      </label>
+    </div>
+  `;
+}
+
+function updatePhotoPicker(form, target) {
   const picker = form.querySelector(".photo-picker");
-  picker.classList.toggle("has-photo", Boolean(birthdayPhoto));
-  picker.querySelector(".photo-preview").innerHTML = birthdayPhoto ? `<img src="${birthdayPhoto}" alt="Selected photo" />` : icon("camera");
-  picker.querySelector(".photo-copy strong").textContent = birthdayPhotoBusy ? "Preparing photo..." : birthdayPhoto ? "Change photo" : "Add a photo";
+  const existing = picker.dataset.photoExisting || "";
+  picker.classList.toggle("has-photo", Boolean(photoDrafts[target] || existing));
+  picker.querySelector(".photo-picker-inner").innerHTML = photoPickerInner(target, existing);
 }
 
 async function choosePhoto(input) {
   const form = input.form;
+  const target = input.dataset.photoInput;
   const note = form.querySelector(".form-note");
   const file = input.files?.[0];
   if (!file) return;
-  birthdayPhotoBusy = true;
-  updatePhotoPicker(form);
+  photoBusy[target] = true;
+  updatePhotoPicker(form, target);
   try {
-    birthdayPhoto = await preparePhoto(file);
+    photoDrafts[target] = await preparePhoto(file);
     note.className = "form-note";
     note.textContent = "Photo added.";
   } catch (error) {
     note.className = "form-note error";
     note.textContent = error.message;
   } finally {
-    birthdayPhotoBusy = false;
+    photoBusy[target] = false;
     input.value = "";
-    updatePhotoPicker(form);
+    updatePhotoPicker(form, target);
   }
 }
 
@@ -1699,8 +2060,9 @@ async function saveBirthday(form) {
   if (!fields.fullName.trim()) return showError("Please enter your full name.");
   if (fields.phoneNumber.replace(/\D/g, "").length < 7) return showError("Please enter a valid phone number.");
   if (!fields.dateOfBirth) return showError("Please enter your date of birth.");
-  if (birthdayPhotoBusy) return showError("Your photo is still being prepared. Please wait a moment.");
-  if (!birthdayPhoto) return showError("Please add a photo of yourself.");
+  if (fields.emailAddress && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(fields.emailAddress)) return showError("Please enter a valid email address.");
+  if (photoBusy.birthday) return showError("Your photo is still being prepared. Please wait a moment.");
+  if (!photoDrafts.birthday) return showError("Please add a photo of yourself.");
   if (!fields.photoConsent) return showError("Please tick the box to confirm we may share your photo on your birthday.");
   const submissionId = form.dataset.submissionId || crypto.randomUUID();
   form.dataset.submissionId = submissionId;
@@ -1711,16 +2073,17 @@ async function saveBirthday(form) {
     const response = await fetch("/api/birthdays", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ ...fields, photo: birthdayPhoto, submissionId })
+      body: JSON.stringify({ ...fields, photo: photoDrafts.birthday, submissionId })
     });
     const result = await response.json().catch(() => ({}));
     if (!response.ok) throw new Error(result.error || "Could not save your birthday. Please try again.");
     const firstName = fields.fullName.trim().split(/\s+/)[0];
     form.reset();
     delete form.dataset.submissionId;
-    birthdayPhoto = "";
-    updatePhotoPicker(form);
+    photoDrafts.birthday = "";
+    updatePhotoPicker(form, "birthday");
     dashboardData = null;
+    if (memberProfile) loadMemberProfile();
     note.className = "form-note success";
     note.textContent = result.updated
       ? `Thanks, ${firstName}! Your birthday details have been updated.`
@@ -1730,6 +2093,127 @@ async function saveBirthday(form) {
   } finally {
     button.disabled = false;
   }
+}
+
+function setMemberNote(text, type = "") {
+  memberNote = text;
+  memberNoteType = type;
+}
+
+async function memberRequest(path, body) {
+  const response = await fetch(path, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body || {})
+  });
+  const result = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(result.error || "Something went wrong. Please try again.");
+  return result;
+}
+
+async function loadMemberProfile() {
+  if (memberChecking) return;
+  memberChecking = true;
+  try {
+    const response = await fetch("/api/member/me");
+    memberProfile = (await response.json()).profile || null;
+  } catch {
+    memberProfile = null;
+  } finally {
+    memberChecking = false;
+    if (activeView === "profile") render();
+  }
+}
+
+async function requestMemberCode() {
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(memberEmail)) {
+    setMemberNote("Please enter a valid email address.", "error");
+    render();
+    return;
+  }
+  memberBusy = true;
+  setMemberNote("");
+  render();
+  try {
+    const result = await memberRequest("/api/member/request-code", { email: memberEmail });
+    memberStep = "code";
+    setMemberNote(result.message, "success");
+  } catch (error) {
+    setMemberNote(error.message, "error");
+  } finally {
+    memberBusy = false;
+    render();
+    document.querySelector("[data-member-code-form] input[name='code']")?.focus();
+  }
+}
+
+async function verifyMemberCode(code) {
+  memberBusy = true;
+  setMemberNote("");
+  render();
+  try {
+    const result = await memberRequest("/api/member/verify", { email: memberEmail, code });
+    memberProfile = result.profile;
+    memberStep = "email";
+    // A brand-new profile has no name yet; open the editor straight away.
+    memberEditing = !memberProfile.name;
+    setMemberNote(memberEditing ? "Welcome! Add your name and photo to finish your profile." : "", "success");
+  } catch (error) {
+    setMemberNote(error.message, "error");
+  } finally {
+    memberBusy = false;
+    render();
+  }
+}
+
+async function saveMemberProfile(form) {
+  // Errors are shown in place rather than through render(), which would
+  // rebuild the form and throw away what the member just typed.
+  const note = form.querySelector(".form-note");
+  const button = form.querySelector("button[type='submit']");
+  const showError = message => {
+    note.className = "form-note error";
+    note.textContent = message;
+  };
+  const fields = Object.fromEntries(new FormData(form).entries());
+  delete fields.photo;
+  if (!fields.fullName.trim()) return showError("Please enter your full name.");
+  if (photoBusy.member) return showError("Your photo is still being prepared. Please wait a moment.");
+  button.disabled = true;
+  button.textContent = "Saving...";
+  try {
+    const result = await memberRequest("/api/member/profile", { ...fields, photo: photoDrafts.member || undefined });
+    memberProfile = result.profile;
+    photoDrafts.member = "";
+    memberEditing = false;
+    dashboardData = null;
+    setMemberNote("Your profile has been updated.", "success");
+    render();
+  } catch (error) {
+    if (/sign in again/i.test(error.message)) {
+      memberProfile = null;
+      setMemberNote(error.message, "error");
+      render();
+      return;
+    }
+    showError(error.message);
+    button.disabled = false;
+    button.textContent = "Save Changes";
+  }
+}
+
+async function signOutMember() {
+  try {
+    await memberRequest("/api/member/logout");
+  } catch {
+    // the local session is cleared regardless
+  }
+  memberProfile = null;
+  memberEditing = false;
+  memberStep = "email";
+  photoDrafts.member = "";
+  setMemberNote("You've been signed out.", "success");
+  render();
 }
 
 async function saveAttendance(form) {
