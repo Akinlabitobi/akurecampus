@@ -303,15 +303,50 @@ async function updateSubmission(id, patch) {
 
 async function deleteSubmission(id) {
   if (!confirm("Delete this record? This cannot be undone.")) return;
+  // A member's key is their oldest record's id; if that record is the one
+  // going, keep their detail page open by moving the key to the next one.
+  const memberIds = selectedMemberKey === id
+    ? memberDirectory(dashboardData?.submissions || []).find(person => person.key === id)?.records.map(row => row.id) || []
+    : [];
   try {
     const response = await fetch(`/api/admin/submissions/${id}`, { method: "DELETE" });
     const result = await response.json();
     if (!response.ok) throw new Error(result.error || "Could not delete this record.");
     dashboardData = result.dashboard;
+    if (memberIds.length) selectedMemberKey = memberIds.find(other => other !== id) || "";
     render();
   } catch (error) {
     alert(error.message);
   }
+}
+
+// Removes every record grouped under one person in the Members tab.
+async function deleteMember(key) {
+  const person = memberDirectory(dashboardData?.submissions || []).find(item => item.key === key);
+  if (!person) return;
+  const count = person.records.length;
+  if (!confirm(`Delete ${person.name || "this member"} and all ${count} of their record${count === 1 ? "" : "s"}? This cannot be undone.`)) return;
+  const failed = [];
+  for (const row of person.records) {
+    try {
+      const response = await fetch(`/api/admin/submissions/${row.id}`, { method: "DELETE" });
+      const result = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(result.error || "Could not delete this record.");
+      dashboardData = result.dashboard;
+    } catch (error) {
+      failed.push(`${recordCode(row)}: ${error.message}`);
+    }
+  }
+  if (!failed.length) selectedMemberKey = "";
+  render();
+  if (failed.length) alert(`Some records could not be deleted:\n${failed.join("\n")}`);
+  else toast("Member deleted.", "success");
+}
+
+// The record "Edit" opens from the member list: their My Profile record if
+// they have one, otherwise the most recent thing they submitted.
+function primaryRecord(person) {
+  return person.records.find(row => row.type === "member") || person.records[person.records.length - 1];
 }
 
 function fieldName(label) {
@@ -1282,9 +1317,18 @@ function recordDetails(row) {
 function membersTab(submissions) {
   const people = memberDirectory(submissions);
   const person = selectedMemberKey && people.find(item => item.key === selectedMemberKey);
+  const canEdit = can("edit_submissions");
+  const canDelete = can("delete_submissions");
+  const recordActions = row => `
+    ${canEdit && row.type !== "cell_report" ? `<button class="btn primary small" type="button" data-edit-submission="${row.id}">Edit</button>` : ""}
+    ${canDelete ? `<button class="btn danger small" type="button" data-delete-submission="${row.id}">Delete</button>` : ""}
+  `;
   if (person) {
     return `
-      <button class="btn ghost-dark" type="button" data-member-back>&larr; All members</button>
+      <div class="inline-actions">
+        <button class="btn ghost-dark" type="button" data-member-back>&larr; All members</button>
+        ${canDelete ? `<button class="btn danger" type="button" data-delete-member="${person.key}">Delete Member</button>` : ""}
+      </div>
       <div class="panel member-detail">
         ${memberAvatar(person, "large")}
         <div>
@@ -1294,12 +1338,13 @@ function membersTab(submissions) {
           <small class="muted">${person.signedInAt ? `Last signed in to My Profile ${new Date(person.signedInAt).toLocaleString()}` : "Has not signed in to My Profile"}</small>
         </div>
       </div>
-      <div class="table section-table">${table(["Type", "Code", "Name", "Details", "Date"], person.records.map(row => [
+      <div class="table section-table">${table(["Type", "Code", "Name", "Details", "Date", ...(canEdit || canDelete ? ["Actions"] : [])], person.records.map(row => [
         SUBMISSION_LABELS[row.type] || escapeHtml(row.type),
         recordCode(row),
         escapeHtml(row.fields.fullName || row.fields.name || "-"),
         `<div class="record-details">${recordDetails(row)}</div>`,
-        new Date(row.createdAt).toLocaleDateString()
+        new Date(row.createdAt).toLocaleDateString(),
+        ...(canEdit || canDelete ? [`<div class="actions-cell">${recordActions(row)}</div>`] : [])
       ]))}</div>
     `;
   }
@@ -1312,7 +1357,11 @@ function membersTab(submissions) {
       <td>${escapeHtml(item.email || "-")}</td>
       <td><div class="tag-row">${memberTags(item) || "-"}</div></td>
       <td>${new Date(item.lastActive).toLocaleDateString()}</td>
-      <td class="actions-cell"><button class="btn outline small" type="button" data-view-member="${item.key}">View</button></td>
+      <td class="actions-cell">
+        <button class="btn outline small" type="button" data-view-member="${item.key}">View</button>
+        ${canEdit && primaryRecord(item).type !== "cell_report" ? `<button class="btn primary small" type="button" data-edit-submission="${primaryRecord(item).id}">Edit</button>` : ""}
+        ${canDelete ? `<button class="btn danger small" type="button" data-delete-member="${item.key}">Delete</button>` : ""}
+      </td>
     </tr>
   `).join("");
   return `
@@ -2295,6 +2344,9 @@ function render() {
     selectedMemberKey = "";
     render();
   });
+  document.querySelectorAll("[data-delete-member]").forEach(button => button.addEventListener("click", () => {
+    deleteMember(button.dataset.deleteMember);
+  }));
   document.querySelector("[data-birthday-form]")?.addEventListener("submit", event => {
     event.preventDefault();
     saveBirthday(event.target);
