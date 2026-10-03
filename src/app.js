@@ -26,9 +26,9 @@ const navItems = [
 // dist/<path>/index.html per view carrying its tags (see src/share-meta.js).
 // Old "#birthdays"-style links still work and are rewritten to the path.
 // "admin" is the friendly public name for the "dashboard" view.
-// "attendance" is linked from the footer only, not the main menu.
+// "attendance" and "lead-a-cell" are linked from the footer, not the main menu.
 const PATH_ALIASES = { admin: "dashboard" };
-const VALID_VIEWS = [...navItems.map(([id]) => id), "attendance", "dashboard"];
+const VALID_VIEWS = [...navItems.map(([id]) => id), "attendance", "lead-a-cell", "dashboard"];
 
 function viewFromLocation() {
   const pick = raw => {
@@ -641,6 +641,7 @@ function simplePage(kind) {
     workforce: ["Join the Workforce", "Serve with your gifts and help build the Akure campus from the beginning.", workforcePage()],
     partnership: ["Partnership", "Partner through prayer, finance, media, venue support, logistics, or professional skills.", partnershipPage()],
     attendance: ["Attendance", "Mark attendance with today's daily code.", attendancePage()],
+    "lead-a-cell": ["Lead a Cell", "Open your home and heart to the people around you. Apply to lead a Harvesters Akure cell.", leadCellPage()],
     birthdays: ["Birthday Celebrations", "Share your birthday with the Harvesters Akure family so we can celebrate you.", birthdayPage()],
     gallery: ["Gallery", "A growing archive of launch, worship, outreach, and community moments.", gallerySection() + formPage("Gallery Upload or Content Idea", ["Full name", "Email address", "Subject", "Message"], "content")],
     contact: ["Contact Us", "Reach the Akure launch team and stay updated.", contactPage()],
@@ -754,6 +755,31 @@ function partnershipPage() {
   `;
 }
 
+// The cells someone can apply to lead: every area cell, or a new one.
+const NEW_CELL = "Start a new cell in my area";
+const leadableCells = () => [...communities.map(([name]) => name).filter(name => /cell$/i.test(name)), NEW_CELL];
+const MEETING_DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
+
+function leadCellPage() {
+  return `
+    <section class="section">
+      <div class="container split">
+        <div>
+          <span class="label">Cell Leadership</span>
+          <h2>Lead a Cell Where You Live</h2>
+          <p>Cells are where people in Harvesters Akure pray, study the Word, and look out for one another during the week. If you want to lead one, in an existing area or a new one, tell us about yourself.</p>
+          <div class="attendance-steps">
+            <div><strong>1</strong><span>Fill in the form</span></div>
+            <div><strong>2</strong><span>A pastor calls you to talk it over</span></div>
+            <div><strong>3</strong><span>Get trained and start leading your cell</span></div>
+          </div>
+        </div>
+        ${formMarkup("Cell Leader Application", ["Full name", "Phone number", "Email address", "Area in Akure", "Preferred cell", "Preferred meeting day", "Leadership experience", "Why do you want to lead?"], "cell_lead")}
+      </div>
+    </section>
+  `;
+}
+
 function attendancePage() {
   return `
     <section class="section">
@@ -862,11 +888,11 @@ function memberSignIn() {
           <h2>Everything About You, In One Place</h2>
           <p>See your communities, the teams you serve on, and your birthday &mdash; and keep your name, phone number, and photo up to date.</p>
           <div class="attendance-steps">
-            <div><strong>1</strong><span>Enter the email you used on our forms</span></div>
+            <div><strong>1</strong><span>Enter your email address</span></div>
             <div><strong>2</strong><span>Type in the code we email you</span></div>
             <div><strong>3</strong><span>View and update your profile</span></div>
           </div>
-          <p class="muted">New here? <a href="/communities" data-nav="communities">Join a community</a> or <a href="/birthdays" data-nav="birthdays">send your birthday</a> with your email address first, then come back to sign in.</p>
+          <p class="muted">New here? Sign in with any email to start your profile. Use the same email when you <a href="/communities" data-nav="communities">join a community</a> or <a href="/birthdays" data-nav="birthdays">send your birthday</a> and it will show up here.</p>
         </div>
         ${form}
       </div>
@@ -1038,10 +1064,14 @@ function formField(field, type) {
   const leadershipInterest = field === "Would you like to lead?";
   const phone = field === "Phone number";
   const amount = field === "Amount";
-  const tall = field === "Message" || field === "Relevant experience";
+  const tall = ["Message", "Relevant experience", "Leadership experience", "Why do you want to lead?"].includes(field);
+  const choices = leadershipInterest ? ["Yes", "No"]
+    : field === "Preferred cell" ? leadableCells()
+    : field === "Preferred meeting day" ? MEETING_DAYS
+    : null;
   // Every field on every public form is required (the server checks too).
-  if (leadershipInterest) {
-    return `<label><span>${field}</span><select name="${name}" required><option value="">Select an option</option><option value="Yes">Yes</option><option value="No">No</option></select></label>`;
+  if (choices) {
+    return `<label><span>${field}</span><select name="${name}" required><option value="">Select an option</option>${choices.map(choice => `<option value="${choice}">${choice}</option>`).join("")}</select></label>`;
   }
   return `<label><span>${field}</span><input name="${name}" type="${dateOfBirth ? "date" : email ? "email" : phone ? "tel" : "text"}" ${amount ? 'inputmode="numeric"' : ""} ${tall ? "data-tall" : ""} required placeholder="${dateOfBirth ? "" : field}" /></label>`;
 }
@@ -1104,6 +1134,7 @@ function dashboard() {
     ["communities", "Communities", full],
     ["cell-attendance", "Cell Attendance", cellTabs],
     ["cell-reports", "Cell Reports", cellTabs],
+    ["cell-leaders", "Cell Leaders", full],
     ["workforce", "Workforce", full],
     ["attendance", "Attendance", full],
     ["birthdays", "Birthdays", full],
@@ -1186,6 +1217,14 @@ function dashboardContent() {
     const rows = records.map(row => [recordCode(row), row.fields.fullName || "-", row.fields.phoneNumber || "-", row.fields.emailAddress || "-", row.fields.department || "-", row.fields.relevantExperience || "-", row.fields.wouldYouLikeToLead || "-", row.status]);
     return `${editableTable(["Code", "Name", "Phone", "Email", "Department", "Experience", "Wants to Lead", "Status"], rows, records)}`;
   }
+  if (activeDashboard === "cell-leaders") {
+    const records = sortByFields(submissions.filter(row => row.type === "cell_lead"), [
+      row => row.fields.preferredCell,
+      row => row.fields.fullName
+    ]);
+    const rows = records.map(row => [recordCode(row), row.fields.fullName || "-", row.fields.phoneNumber || "-", row.fields.emailAddress || "-", row.fields.areaInAkure || "-", row.fields.preferredCell || "-", row.fields.preferredMeetingDay || "-", row.fields.leadershipExperience || "-", row.fields.whyDoYouWantToLead || "-", row.status, new Date(row.createdAt).toLocaleDateString()]);
+    return `<div class="metric-grid"><article class="metric large"><span>Cell Leader Applications</span><strong>${records.length}</strong><small>from the Lead a Cell form</small></article></div>${editableTable(["Code", "Name", "Phone", "Email", "Area", "Cell", "Meeting Day", "Experience", "Why Lead", "Status", "Date"], rows, records)}`;
+  }
   if (activeDashboard === "attendance") {
     const records = submissions.filter(row => row.type === "attendance");
     const rows = records.map(row => [row.fields.name || "-", row.fields.attendanceCode || row.fields.shortCode || "-", row.fields.phone || "-", row.fields.department || "-", row.fields.service || "-", new Date(row.createdAt).toLocaleString()]);
@@ -1229,7 +1268,7 @@ function dashboardContent() {
 }
 
 const SUBMISSION_LABELS = {
-  community: "Community", workforce: "Workforce", birthday: "Birthday", attendance: "Attendance", member: "Profile",
+  community: "Community", workforce: "Workforce", cell_lead: "Cell leader application", birthday: "Birthday", attendance: "Attendance", member: "Profile",
   counselling: "Care request", partnership: "Partnership", giving: "Giving", nlp: "Prayer updates",
   contact: "Message", content: "Content idea", newsletter: "Newsletter"
 };
@@ -1987,7 +2026,7 @@ function footer() {
       <div class="footer-main">
         <div><img src="/logo-white.png" alt="Harvesters Akure" /><p>A campus of Harvesters International Christian Centre, coming to Akure.</p></div>
         <div><h4>The Church</h4><button data-nav="about">About Harvesters Akure</button><button data-nav="nlp">Next Level Prayers</button><button data-nav="gallery">Gallery</button></div>
-        <div><h4>Get Involved</h4><button data-nav="communities">Join a Community</button><button data-nav="workforce">Join the Workforce</button><button data-nav="partnership">Partner With Us</button><button data-nav="birthdays">Birthday Celebrations</button><button data-nav="profile">My Profile</button><button data-nav="attendance">Mark Attendance</button><button type="button" data-install ${isStandalone() ? "hidden" : ""}>Install the App</button></div>
+        <div><h4>Get Involved</h4><button data-nav="communities">Join a Community</button><button data-nav="workforce">Join the Workforce</button><button data-nav="lead-a-cell">Lead a Cell</button><button data-nav="partnership">Partner With Us</button><button data-nav="birthdays">Birthday Celebrations</button><button data-nav="profile">My Profile</button><button data-nav="attendance">Mark Attendance</button><button type="button" data-install ${isStandalone() ? "hidden" : ""}>Install the App</button></div>
         <div><h4>Contact</h4><p>Akure, Ondo State</p><a href="${contactInfo.phoneHref}">${contactInfo.phone}</a><p>akure@harvestersng.org</p><div class="footer-social">${socialLinks.map(social => `<a href="${social.url}" target="_blank" rel="noopener noreferrer" aria-label="${social.name} ${social.handle}" title="${social.name} ${social.handle}">${icon(social.name.toLowerCase())}</a>`).join("")}</div><button data-nav="dashboard">Team Dashboard</button><a href="/callcentre/">Outreach Call Centre</a></div>
       </div>
       <div class="copyright">© 2026 Harvesters Akure. A campus of Harvesters International Christian Centre.</div>
@@ -3016,6 +3055,7 @@ function welcomeContent(type, fields) {
     counselling: { icon: "heart", title: "We've received your request", message: "A member of our pastoral team will reach out to you at your preferred time. You are not alone, and we're here for you.", extra: "" },
     partnership: { icon: "heart", title: "Thank you for partnering with us!", message: "Our partnership team will contact you about how we can work together for the Akure launch.", extra: "Your support makes a real difference." },
     giving: { icon: "heart", title: "Thank you for your generosity!", message: "Your pledge has been recorded. The finance team may reach out to confirm the details.", extra: "God loves a cheerful giver." },
+    cell_lead: { icon: "users", title: "Thank you for stepping up to lead!", message: `We've received your application to lead ${fields.preferredCell === NEW_CELL ? "a new cell in your area" : fields.preferredCell || "a cell"}. A pastor will call you about next steps and training.`, extra: "Leading a cell is one of the best ways to care for people." },
     nlp: { icon: "calendar", title: `${hello} to Next Level Prayers!`, message: "You'll receive prayer updates and reminders. Join us daily at 6:30 AM.", extra: "" },
     contact: { icon: "mail", title: "Message received", message: "Thank you for reaching out. Someone from the Harvesters Akure team will get back to you shortly.", extra: "" },
     content: { icon: "check", title: "Thank you for sharing!", message: "The media team will review your content idea or upload.", extra: "" }
@@ -3080,8 +3120,10 @@ function editorInput(key, value) {
   if (key === "preferredCommunity") return select(communities.map(([group]) => group), value);
   if (key === "department") return select(departments, value);
   if (key === "wouldYouLikeToLead") return select(["Yes", "No"], value);
+  if (key === "preferredCell") return select(leadableCells(), value);
+  if (key === "preferredMeetingDay") return select(MEETING_DAYS, value);
   if (/date$|^dateOf/i.test(key) && /^\d{4}-\d{2}-\d{2}$/.test(value)) return `<input type="date" name="${name}" value="${safe}" />`;
-  if (/message|notes?|experience|description/i.test(key) || String(value).length > 70) return `<textarea name="${name}" rows="3">${safe}</textarea>`;
+  if (/message|notes?|experience|description|^why/i.test(key) || String(value).length > 70) return `<textarea name="${name}" rows="3">${safe}</textarea>`;
   return `<input name="${name}" value="${safe}" />`;
 }
 

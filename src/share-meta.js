@@ -87,6 +87,17 @@ export const SHARE_PAGES = {
     photo: "gallery-globe.png",
     layout: "full"
   },
+  "lead-a-cell": {
+    path: "/lead-a-cell",
+    title: "Lead a Cell | Harvesters Akure",
+    description: "Apply to lead a Harvesters Akure cell in your area: prayer, the Word and community during the week.",
+    eyebrow: "Cell Leadership",
+    headline: "Lead a cell where you live.",
+    sub: "Apply to lead a Harvesters Akure cell in your area.",
+    photo: "gallery-globe.png",
+    layout: "full",
+    image: "communities"
+  },
   partnership: {
     path: "/partnership",
     title: "Partnership | Harvesters Akure",

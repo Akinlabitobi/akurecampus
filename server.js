@@ -972,6 +972,7 @@ function sameName(a, b) {
 const ACTIVITY_LABELS = {
   counselling: ["Care request", fields => fields.careArea],
   partnership: ["Partnership interest", fields => fields.partnershipType],
+  cell_lead: ["Cell leader application", fields => fields.preferredCell],
   giving: ["Giving pledge", fields => [fields.fund, fields.amount && `₦${Number(fields.amount).toLocaleString("en-NG")}`].filter(Boolean).join(" · ")],
   nlp: ["Prayer updates", fields => fields.prayerFocus],
   contact: ["Message to the team", fields => fields.subject],
@@ -1163,6 +1164,7 @@ async function sendTermiiBulkEmail(recipients, subject, message) {
 const REQUIRED_FIELDS = {
   community: ["fullName", "phoneNumber", "emailAddress", "preferredCommunity", "areaInAkure", "dateOfBirth", "wouldYouLikeToLead"],
   workforce: ["fullName", "phoneNumber", "emailAddress", "department", "relevantExperience", "wouldYouLikeToLead"],
+  cell_lead: ["fullName", "phoneNumber", "emailAddress", "areaInAkure", "preferredCell", "preferredMeetingDay", "leadershipExperience", "whyDoYouWantToLead"],
   counselling: ["fullName", "emailAddress", "phoneNumber", "careArea", "preferredTime"],
   nlp: ["fullName", "phoneNumber", "emailAddress", "prayerFocus"],
   giving: ["fullName", "phoneNumber", "emailAddress", "fund", "amount"],
@@ -1359,14 +1361,11 @@ async function handleApi(req, res, url) {
         send(res, 429, { error: "Too many codes requested for this email. Please try again in an hour." });
         return true;
       }
-      // The same reply whether or not the email is known, so this form can't
-      // be used to find out who has given their details to the church.
-      const reply = { ok: true, message: "If this email is registered with Harvesters Akure, a 6-digit code is on its way. It expires in 10 minutes." };
-      const known = db.submissions.some(record => emailKeyOf(emailAddress(record.fields)) === email);
-      if (!known) {
-        send(res, 200, reply);
-        return true;
-      }
+      // Any email gets a code: someone new signs in and starts a fresh
+      // profile, and anything they later submit with that email joins it.
+      // Every email is treated alike, so the reply still reveals nothing
+      // about who has given their details to the church.
+      const reply = { ok: true, message: "A 6-digit code is on its way to your email. It expires in 10 minutes. If you can't see it, check your spam folder." };
       const code = String(randomInt(0, 1_000_000)).padStart(6, "0");
       await sendSignInCode(email, code);
       ensureMemberRecord(db, email).fields.signInCode = {
