@@ -1033,6 +1033,10 @@ h3 {
   font-weight: 800;
 }
 
+.form label[data-reveal-for][hidden] {
+  display: none;
+}
+
 .form label.consent {
   display: flex;
   align-items: flex-start;

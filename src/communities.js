@@ -27,3 +27,19 @@ export const COMMUNITIES = [
   ["Oke Ijebu Cell", "A cell group meeting around Oke Ijebu and nearby areas."],
   ["Sijuwade Cell", "A cell group meeting around Sijuwade and its surroundings."]
 ];
+
+// A signup can put someone in a community and a workforce team at once: the
+// community form asks about joining the workforce (workforceTeam) and the
+// workforce form asks about joining a small group (smallGroup). These give
+// the group/team a record belongs to, whichever form it came from.
+export function communityOf(record) {
+  if (record.type === "community") return record.fields.preferredCommunity || "";
+  if (record.type === "workforce") return record.fields.smallGroup || "";
+  return "";
+}
+
+export function departmentOf(record) {
+  if (record.type === "workforce") return record.fields.department || "";
+  if (record.type === "community") return record.fields.workforceTeam || "";
+  return "";
+}

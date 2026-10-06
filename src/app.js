@@ -1,7 +1,7 @@
 import * as THREE from "three";
 import { externalLinks, contactInfo, socialLinks } from "./config.js";
 import { SHARE_PAGES } from "./share-meta.js";
-import { COMMUNITIES as communities } from "./communities.js";
+import { COMMUNITIES as communities, communityOf, departmentOf } from "./communities.js";
 import { postOrQueue, flushOutbox } from "./offline-queue.js";
 
 const QUEUED_NOTE = "You're offline, so this has been saved on your device. It will be sent automatically when you're back online.";
@@ -674,7 +674,7 @@ function communityPage() {
         <div class="card-grid">${communities.map(([title, text]) => communityCard(title, text)).join("")}</div>
       </div>
     </section>
-    ${lockedFormModal("Community Signup", ["Full name", "Phone number", "Email address", "Preferred community", "Area in Akure", "Date of Birth", "Would you like to lead?"], "community", "Preferred community")}
+    ${lockedFormModal("Community Signup", ["Full name", "Phone number", "Email address", "Preferred community", "Area in Akure", "Date of Birth", "Would you like to lead?", JOIN_WORKFORCE, "Workforce team"], "community", "Preferred community")}
   `;
 }
 
@@ -723,7 +723,7 @@ function workforcePage() {
         <div class="pill-grid">${departments.map(item => `<button class="${selectedChoice.workforce === item ? "active" : ""}" data-choose="workforce" data-choice="${item}">${item}</button>`).join("")}</div>
       </div>
     </section>
-    ${lockedFormModal("Workforce Application", ["Full name", "Phone number", "Email address", "Department", "Relevant experience", "Would you like to lead?"], "workforce", "Department")}
+    ${lockedFormModal("Workforce Application", ["Full name", "Phone number", "Email address", "Department", "Relevant experience", "Would you like to lead?", JOIN_SMALL_GROUP, "Small group"], "workforce", "Department")}
   `;
 }
 
@@ -1057,23 +1057,58 @@ function formMarkup(title, fields, type, locked = {}) {
   `;
 }
 
+// Follow-up questions: the community form offers the workforce and the
+// workforce form offers a small group. The pick only shows (and is only
+// required) once they answer Yes.
+const JOIN_WORKFORCE = "Would you like to join the workforce?";
+const JOIN_SMALL_GROUP = "Would you like to join a small group?";
+const REVEALS = { [JOIN_WORKFORCE]: "Workforce team", [JOIN_SMALL_GROUP]: "Small group" };
+
+// Every community and cell, split into interest groups and area cells.
+function smallGroupOptions(current = "") {
+  const option = name => `<option value="${escapeHtml(name)}" ${name === current ? "selected" : ""}>${escapeHtml(name)}</option>`;
+  const names = communities.map(([name]) => name);
+  const isCell = name => /cell$/i.test(name);
+  const extra = current && !names.includes(current) ? option(current) : "";
+  return `${extra}<optgroup label="Interest communities">${names.filter(name => !isCell(name)).map(option).join("")}</optgroup>`
+    + `<optgroup label="Cells (by area)">${names.filter(isCell).map(option).join("")}</optgroup>`;
+}
+
 function formField(field, type) {
   const name = fieldName(field);
+  const question = Object.keys(REVEALS).find(key => REVEALS[key] === field);
+  if (question) {
+    const smallGroup = field === "Small group";
+    const options = smallGroup ? smallGroupOptions() : departments.map(item => `<option value="${item}">${item}</option>`).join("");
+    return `<label data-reveal-for="${fieldName(question)}" hidden><span>${smallGroup ? "Pick a small group (community or cell)" : "Pick a workforce team"}</span><select name="${name}" required disabled><option value="">Select an option</option>${options}</select></label>`;
+  }
   const dateOfBirth = field === "Date of Birth";
   const email = field === "Email address";
-  const leadershipInterest = field === "Would you like to lead?";
+  const yesNo = field === "Would you like to lead?" || field in REVEALS;
   const phone = field === "Phone number";
   const amount = field === "Amount";
   const tall = ["Message", "Relevant experience", "Leadership experience", "Why do you want to lead?"].includes(field);
-  const choices = leadershipInterest ? ["Yes", "No"]
+  const choices = yesNo ? ["Yes", "No"]
     : field === "Preferred cell" ? leadableCells()
     : field === "Preferred meeting day" ? MEETING_DAYS
     : null;
   // Every field on every public form is required (the server checks too).
   if (choices) {
-    return `<label><span>${field}</span><select name="${name}" required><option value="">Select an option</option>${choices.map(choice => `<option value="${choice}">${choice}</option>`).join("")}</select></label>`;
+    return `<label><span>${field}</span><select name="${name}" required ${field in REVEALS ? "data-reveal" : ""}><option value="">Select an option</option>${choices.map(choice => `<option value="${choice}">${choice}</option>`).join("")}</select></label>`;
   }
   return `<label><span>${field}</span><input name="${name}" type="${dateOfBirth ? "date" : email ? "email" : phone ? "tel" : "text"}" ${amount ? 'inputmode="numeric"' : ""} ${tall ? "data-tall" : ""} required placeholder="${dateOfBirth ? "" : field}" /></label>`;
+}
+
+// Shows a follow-up pick only while its question is answered Yes. A hidden
+// pick is disabled, so the browser neither requires nor submits it.
+function syncReveals(form) {
+  form.querySelectorAll("[data-reveal-for]").forEach(label => {
+    const show = form.elements[label.dataset.revealFor]?.value === "Yes";
+    const select = label.querySelector("select");
+    label.hidden = !show;
+    select.disabled = !show;
+    if (!show) select.value = "";
+  });
 }
 
 function lockedField(field, value) {
@@ -1202,20 +1237,25 @@ function dashboardContent() {
     `;
   }
   if (activeDashboard === "communities") {
-    const records = sortByFields(submissions.filter(row => row.type === "community"), [
-      row => row.fields.preferredCommunity,
+    // Includes workforce signups who also picked a small group; their
+    // community-form-only columns (area, wants to lead) are blank.
+    const records = sortByFields(submissions.filter(row => communityOf(row)), [
+      row => communityOf(row),
       row => row.fields.fullName
     ]);
-    const rows = records.map(row => [recordCode(row), row.fields.fullName || "-", row.fields.phoneNumber || "-", row.fields.emailAddress || "-", row.fields.preferredCommunity || "-", row.fields.areaInAkure || "-", row.fields.wouldYouLikeToLead || "-", new Date(row.createdAt).toLocaleDateString()]);
-    return `${editableTable(["Code", "Name", "Phone", "Email", "Community", "Area", "Wants to Lead", "Date"], rows, records)}`;
+    const own = (row, key) => (row.type === "community" && row.fields[key]) || "-";
+    const rows = records.map(row => [recordCode(row), row.fields.fullName || "-", row.fields.phoneNumber || "-", row.fields.emailAddress || "-", communityOf(row), own(row, "areaInAkure"), own(row, "wouldYouLikeToLead"), departmentOf(row) || "-", row.type === "community" ? "Community form" : "Workforce form", new Date(row.createdAt).toLocaleDateString()]);
+    return `${editableTable(["Code", "Name", "Phone", "Email", "Community", "Area", "Wants to Lead", "Workforce Team", "Signed Up Via", "Date"], rows, records)}`;
   }
   if (activeDashboard === "workforce") {
-    const records = sortByFields(submissions.filter(row => row.type === "workforce"), [
-      row => row.fields.department,
+    // Includes community signups who also picked a workforce team.
+    const records = sortByFields(submissions.filter(row => departmentOf(row)), [
+      row => departmentOf(row),
       row => row.fields.fullName
     ]);
-    const rows = records.map(row => [recordCode(row), row.fields.fullName || "-", row.fields.phoneNumber || "-", row.fields.emailAddress || "-", row.fields.department || "-", row.fields.relevantExperience || "-", row.fields.wouldYouLikeToLead || "-", row.status]);
-    return `${editableTable(["Code", "Name", "Phone", "Email", "Department", "Experience", "Wants to Lead", "Status"], rows, records)}`;
+    const own = (row, key) => (row.type === "workforce" && row.fields[key]) || "-";
+    const rows = records.map(row => [recordCode(row), row.fields.fullName || "-", row.fields.phoneNumber || "-", row.fields.emailAddress || "-", departmentOf(row), own(row, "relevantExperience"), own(row, "wouldYouLikeToLead"), communityOf(row) || "-", row.type === "workforce" ? "Workforce form" : "Community form", row.status]);
+    return `${editableTable(["Code", "Name", "Phone", "Email", "Department", "Experience", "Wants to Lead", "Small Group", "Signed Up Via", "Status"], rows, records)}`;
   }
   if (activeDashboard === "cell-leaders") {
     const records = sortByFields(submissions.filter(row => row.type === "cell_lead"), [
@@ -1322,8 +1362,8 @@ function summarizeMember(records) {
     phone: member?.fields.phoneNumber || latest(fields => fields.phoneNumber || fields.phone),
     email: latest(fields => fields.emailAddress || fields.email),
     photoUrl: photoRecord ? adminPhotoUrl(photoRecord) : "",
-    communities: [...new Set(sorted.filter(row => row.type === "community").map(row => row.fields.preferredCommunity).filter(Boolean))],
-    departments: [...new Set(sorted.filter(row => row.type === "workforce").map(row => row.fields.department).filter(Boolean))],
+    communities: [...new Set(sorted.map(communityOf).filter(Boolean))],
+    departments: [...new Set(sorted.map(departmentOf).filter(Boolean))],
     birthday: (birthdays.find(row => String(row.fields.fullName).toLowerCase() === String(name).toLowerCase()) || birthdays[0])?.fields.dateOfBirth || latest(fields => fields.dateOfBirth),
     attendance: sorted.filter(row => row.type === "attendance").length,
     signedInAt: member?.fields.lastSignInAt || "",
@@ -2211,6 +2251,7 @@ function render() {
     menuOpen = !menuOpen;
     render();
   });
+  document.querySelectorAll("[data-reveal]").forEach(select => select.addEventListener("change", () => syncReveals(select.form)));
   document.querySelectorAll("[data-api-form]").forEach(form => form.addEventListener("submit", async event => {
     event.preventDefault();
     const note = form.querySelector(".form-note") || document.createElement("p");
@@ -2227,6 +2268,7 @@ function render() {
       const result = await postOrQueue("/api/submissions", { type: form.dataset.formType, fields, submissionId }, form.querySelector("h3")?.textContent || "Form");
       dashboardData = null;
       form.reset();
+      syncReveals(form);
       delete form.dataset.submissionId;
       note.className = "form-note success";
       note.textContent = result.queued
@@ -3031,7 +3073,9 @@ function welcomeContent(type, fields) {
       message: `${description} ${isCell
         ? "Your cell leader will reach out with details of your next cell meeting."
         : "Someone from the group will reach out soon about how to get involved."}`,
-      extra: "We're so glad you're part of the Harvesters Akure family."
+      extra: fields.workforceTeam
+        ? `You're also signed up for the ${fields.workforceTeam} team; its team lead will contact you about training.`
+        : "We're so glad you're part of the Harvesters Akure family."
     };
   }
   if (type === "workforce") {
@@ -3040,7 +3084,9 @@ function welcomeContent(type, fields) {
       icon: "briefcase",
       title: `${hello} to the ${team} team!`,
       message: `Thank you for choosing to serve. The ${team} team lead will contact you about training and next steps.`,
-      extra: "Together we're building something powerful in Akure."
+      extra: fields.smallGroup
+        ? `You've also joined ${fields.smallGroup}; someone from there will reach out soon.`
+        : "Together we're building something powerful in Akure."
     };
   }
   if (type === "birthday") {
@@ -3118,8 +3164,9 @@ function editorInput(key, value) {
     return `<select name="${name}"><option value="">-</option>${list.map(option => `<option value="${escapeHtml(option)}" ${option === current ? "selected" : ""}>${escapeHtml(option)}</option>`).join("")}</select>`;
   };
   if (key === "preferredCommunity") return select(communities.map(([group]) => group), value);
-  if (key === "department") return select(departments, value);
-  if (key === "wouldYouLikeToLead") return select(["Yes", "No"], value);
+  if (key === "smallGroup") return `<select name="${name}"><option value="">-</option>${smallGroupOptions(value)}</select>`;
+  if (key === "department" || key === "workforceTeam") return select(departments, value);
+  if (["wouldYouLikeToLead", fieldName(JOIN_WORKFORCE), fieldName(JOIN_SMALL_GROUP)].includes(key)) return select(["Yes", "No"], value);
   if (key === "preferredCell") return select(leadableCells(), value);
   if (key === "preferredMeetingDay") return select(MEETING_DAYS, value);
   if (/date$|^dateOf/i.test(key) && /^\d{4}-\d{2}-\d{2}$/.test(value)) return `<input type="date" name="${name}" value="${safe}" />`;
@@ -3128,7 +3175,11 @@ function editorInput(key, value) {
 }
 
 function showSubmissionEditor(record) {
-  const entries = Object.entries(record.fields).filter(([key, value]) => !NON_EDITABLE_FIELDS.includes(key) && (typeof value === "string" || typeof value === "number"));
+  // Older signups, and ones that answered No, have no follow-up pick yet;
+  // offer it anyway so the team can add one.
+  const followUp = { community: "workforceTeam", workforce: "smallGroup" }[record.type];
+  const fields = followUp && !(followUp in record.fields) ? { ...record.fields, [followUp]: "" } : record.fields;
+  const entries = Object.entries(fields).filter(([key, value]) => !NON_EDITABLE_FIELDS.includes(key) && (typeof value === "string" || typeof value === "number"));
   const { modal, close } = openDialog(`
     <form class="form submission-editor" data-submission-editor>
       <h3>Edit ${escapeHtml(SUBMISSION_LABELS[record.type] || record.type)} &middot; ${escapeHtml(recordCode(record))}</h3>

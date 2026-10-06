@@ -4,7 +4,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync, statSync, unlinkSyn
 import { extname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createClient } from "@supabase/supabase-js";
-import { COMMUNITIES } from "./src/communities.js";
+import { COMMUNITIES, communityOf, departmentOf } from "./src/communities.js";
 
 const root = resolve(fileURLToPath(new URL(".", import.meta.url)));
 const dataDir = join(root, "data");
@@ -597,8 +597,9 @@ function dashboard(db) {
 
   return {
     metrics: {
-      community: byType("community").length,
-      workforce: byType("workforce").length,
+      // Counts signups from either form that picked a community / team.
+      community: submissions.filter(communityOf).length,
+      workforce: submissions.filter(departmentOf).length,
       giving: totalGiving,
       partnership: byType("partnership").length,
       counselling: byType("counselling").length,
@@ -656,16 +657,19 @@ function csv(items) {
 // exactly (including the fix above generically applied) and are sorted the
 // same way the tab is -- grouped by community/department, not signup time.
 function csvCommunity(items) {
-  const sorted = sortByFields(items, [record => record.fields.preferredCommunity, record => record.fields.fullName]);
-  const headers = ["Code", "Name", "Phone", "Email", "Community", "Area", "Wants to Lead", "Status", "Date"];
+  const sorted = sortByFields(items, [communityOf, record => record.fields.fullName]);
+  const own = (record, key) => (record.type === "community" && record.fields[key]) || "";
+  const headers = ["Code", "Name", "Phone", "Email", "Community", "Area", "Wants to Lead", "Workforce Team", "Signed Up Via", "Status", "Date"];
   const rows = sorted.map(record => [
     record.shortCode || makeShortCode(record.id),
     record.fields.fullName || "",
     record.fields.phoneNumber || "",
     record.fields.emailAddress || "",
-    record.fields.preferredCommunity || "",
-    record.fields.areaInAkure || "",
-    record.fields.wouldYouLikeToLead || "",
+    communityOf(record),
+    own(record, "areaInAkure"),
+    own(record, "wouldYouLikeToLead"),
+    departmentOf(record),
+    record.type === "community" ? "Community form" : "Workforce form",
     record.status || "",
     record.createdAt
   ]);
@@ -673,16 +677,19 @@ function csvCommunity(items) {
 }
 
 function csvWorkforce(items) {
-  const sorted = sortByFields(items, [record => record.fields.department, record => record.fields.fullName]);
-  const headers = ["Code", "Name", "Phone", "Email", "Department", "Experience", "Wants to Lead", "Status", "Date"];
+  const sorted = sortByFields(items, [departmentOf, record => record.fields.fullName]);
+  const own = (record, key) => (record.type === "workforce" && record.fields[key]) || "";
+  const headers = ["Code", "Name", "Phone", "Email", "Department", "Experience", "Wants to Lead", "Small Group", "Signed Up Via", "Status", "Date"];
   const rows = sorted.map(record => [
     record.shortCode || makeShortCode(record.id),
     record.fields.fullName || "",
     record.fields.phoneNumber || "",
     record.fields.emailAddress || "",
-    record.fields.department || "",
-    record.fields.relevantExperience || "",
-    record.fields.wouldYouLikeToLead || "",
+    departmentOf(record),
+    own(record, "relevantExperience"),
+    own(record, "wouldYouLikeToLead"),
+    communityOf(record),
+    record.type === "workforce" ? "Workforce form" : "Community form",
     record.status || "",
     record.createdAt
   ]);
@@ -800,8 +807,8 @@ function sameCelebrant(record, fields) {
 
 // ---- Cell reports ------------------------------------------------------
 //
-// A cell's members are everyone who joined it through the Communities page
-// (community records whose preferredCommunity is that cell). A cell report
+// A cell's members are everyone who joined it, through the Communities page
+// or as the small group picked on the workforce form (see communityOf). A cell report
 // is one week's meeting: who was present or absent, visitors, topic,
 // offering and notes. Cells meet weekly, so there is one report per cell per
 // week (Monday to Sunday); saving any date in that week edits it.
@@ -816,7 +823,7 @@ function sameCellName(a, b) {
 
 function cellsForAdmin(admin, db) {
   if (hasPermission(admin, "view_dashboard")) {
-    const inUse = db.submissions.filter(record => record.type === "community").map(record => record.fields.preferredCommunity).filter(Boolean);
+    const inUse = db.submissions.map(communityOf).filter(Boolean);
     return [...new Set([...COMMUNITY_NAMES, ...inUse])];
   }
   if (admin.role !== "cell_leader") return [];
@@ -838,7 +845,7 @@ function requireCellAccess(req, res, db) {
 function cellMembers(db, cell) {
   const byPerson = new Map();
   db.submissions
-    .filter(record => record.type === "community" && sameCellName(record.fields.preferredCommunity, cell))
+    .filter(record => sameCellName(communityOf(record), cell))
     .sort((a, b) => new Date(a.createdAt) - new Date(b.createdAt))
     .forEach(record => {
       const phone = String(phoneNumber(record.fields)).replace(/\D/g, "");
@@ -998,8 +1005,8 @@ function buildMemberProfile(db, email) {
     dateOfBirth: ownBirthday?.fields.dateOfBirth || latest(fields => fields.dateOfBirth),
     photoUrl: member?.fields.photoPath ? photoUrl(member) : ownBirthday?.fields.photoPath ? photoUrl(ownBirthday) : "",
     memberSince: records[0]?.createdAt || member?.createdAt || "",
-    communities: records.filter(record => record.type === "community").map(record => ({ name: record.fields.preferredCommunity, date: record.createdAt })),
-    departments: records.filter(record => record.type === "workforce").map(record => ({ name: record.fields.department, date: record.createdAt })),
+    communities: records.filter(communityOf).map(record => ({ name: communityOf(record), date: record.createdAt })),
+    departments: records.filter(departmentOf).map(record => ({ name: departmentOf(record), date: record.createdAt })),
     birthdays: birthdays.map(record => ({
       name: record.fields.fullName,
       dateOfBirth: record.fields.dateOfBirth,
@@ -1177,6 +1184,10 @@ const REQUIRED_FIELDS = {
 function validateSubmission(type, fields) {
   const missing = (REQUIRED_FIELDS[type] || []).find(key => !String(fields[key] || "").trim());
   if (missing) throw new Error(`Please complete the ${missing.replace(/([A-Z])/g, " $1").toLowerCase()} field.`);
+  // The follow-up picks are only asked for once the question is answered Yes.
+  if (type === "community" && fields.wouldYouLikeToJoinTheWorkforce === "Yes" && !String(fields.workforceTeam || "").trim()) throw new Error("Please pick a workforce team.");
+  if (type === "workforce" && fields.wouldYouLikeToJoinASmallGroup === "Yes" && !String(fields.smallGroup || "").trim()) throw new Error("Please pick a small group.");
+  if (fields.smallGroup && !COMMUNITY_NAMES.includes(fields.smallGroup)) throw new Error("Please pick a small group from the list.");
   if (fields.dateOfBirth && !/^\d{4}-\d{2}-\d{2}$/.test(fields.dateOfBirth)) throw new Error("Please enter a valid date of birth.");
   if (fields.emailAddress && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(fields.emailAddress)) throw new Error("Please enter a valid email address.");
   if (fields.phoneNumber && fields.phoneNumber.replace(/\D/g, "").length < 7) throw new Error("Please enter a valid phone number.");
@@ -2002,10 +2013,10 @@ async function handleApi(req, res, url) {
     let body;
     let filename;
     if (type === "community") {
-      body = csvCommunity(db.submissions.filter(record => record.type === "community"));
+      body = csvCommunity(db.submissions.filter(communityOf));
       filename = "harvesters-akure-communities.csv";
     } else if (type === "workforce") {
-      body = csvWorkforce(db.submissions.filter(record => record.type === "workforce"));
+      body = csvWorkforce(db.submissions.filter(departmentOf));
       filename = "harvesters-akure-workforce.csv";
     } else if (type === "birthday") {
       const protocol = String(req.headers["x-forwarded-proto"] || url.protocol.replace(":", "")).split(",")[0];
