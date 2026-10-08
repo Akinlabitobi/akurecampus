@@ -1,12 +1,12 @@
-// Draws the 1200x630 link-preview image for every page in src/share-meta.js
+// Draws the 1200x630 link-preview image for every page in src/lib/share-meta.js
 // into public/share/<page>.jpg. Run with: npm run share-images
 //
 // To use a real photo for a page, drop it in public/ and set that page's
-// `photo` in src/share-meta.js (and bump SHARE_IMAGE_VERSION), then re-run.
+// `photo` in src/lib/share-meta.js (and bump SHARE_IMAGE_VERSION), then re-run.
 import { chromium } from "playwright";
 import { mkdirSync, readFileSync } from "node:fs";
 import { extname } from "node:path";
-import { SHARE_PAGES } from "../src/share-meta.js";
+import { SHARE_PAGES } from "../src/lib/share-meta.js";
 
 const dataUrl = file => {
   const type = { ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".webp": "image/webp" }[extname(file).toLowerCase()];

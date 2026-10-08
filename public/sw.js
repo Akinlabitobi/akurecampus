@@ -9,7 +9,7 @@
 //     background.
 //   - /api/*: never touched. Form data, member details, photos and the
 //     dashboard are private and always go straight to the server; forms
-//     filled in offline are queued by the page itself (see src/offline-queue.js).
+//     filled in offline are queued by the page itself (see src/lib/offline-queue.js).
 //
 // Bump VERSION to force every installed copy to drop its saved files.
 const VERSION = "v2";

@@ -1,6 +1,6 @@
 import { resolve, dirname } from "node:path";
 import { fileURLToPath } from "node:url";
-import { SHARE_PAGES, shareMetaTags } from "./src/share-meta.js";
+import { SHARE_PAGES, shareMetaTags } from "./src/lib/share-meta.js";
 
 const root = dirname(fileURLToPath(import.meta.url));
 const SHARE_BLOCK = /<!-- share-meta[\s\S]*?<!-- \/share-meta -->/;

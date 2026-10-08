@@ -5,7 +5,7 @@
 //     previewers never run JavaScript and never see anything after a "#".
 //   - scripts/generate-share-images.mjs draws each page's 1200x630 image
 //     from the headline, text and photo below (run: npm run share-images).
-//   - src/app.js sets the browser tab title from `title`.
+//   - src/ (the browser app) sets the browser tab title from `title`.
 //
 // After changing a headline or photo, re-run `npm run share-images` and bump
 // SHARE_IMAGE_VERSION so WhatsApp fetches the new picture instead of its

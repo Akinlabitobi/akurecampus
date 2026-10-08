@@ -4,7 +4,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync, statSync, unlinkSyn
 import { extname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { createClient } from "@supabase/supabase-js";
-import { COMMUNITIES, communityOf, departmentOf } from "./src/communities.js";
+import { COMMUNITIES, communityOf, departmentOf } from "./src/lib/communities.js";
 
 const root = resolve(fileURLToPath(new URL(".", import.meta.url)));
 const dataDir = join(root, "data");
@@ -1167,7 +1167,7 @@ async function sendTermiiBulkEmail(recipients, subject, message) {
 }
 
 // Every field on every public form is required. Mirrors the forms in
-// src/app.js; the browser checks first, this stops anyone skipping it.
+// src/ (the browser app); the browser checks first, this stops anyone skipping it.
 const REQUIRED_FIELDS = {
   community: ["fullName", "phoneNumber", "emailAddress", "preferredCommunity", "areaInAkure", "dateOfBirth", "wouldYouLikeToLead"],
   workforce: ["fullName", "phoneNumber", "emailAddress", "department", "relevantExperience", "wouldYouLikeToLead"],
